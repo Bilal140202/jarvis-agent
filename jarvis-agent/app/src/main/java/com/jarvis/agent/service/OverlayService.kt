@@ -11,13 +11,13 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -29,11 +29,8 @@ import kotlinx.coroutines.*
 /**
  * Overlay Service — floating chat bubble that can be shown over any app.
  *
- * Two states:
- * - Collapsed: Small circular floating bubble (draggable)
- * - Expanded: Chat panel with input, messages, and send button
- *
- * Communicates with the main ChatActivity via broadcasts.
+ * IMPORTANT: Requires SYSTEM_ALERT_WINDOW permission (granted in Settings).
+ * On Android 12+, foreground service type must be declared.
  */
 class OverlayService : Service() {
 
@@ -43,12 +40,29 @@ class OverlayService : Service() {
             private set
 
         fun show(context: Context) {
-            val intent = Intent(context, OverlayService::class.java)
-            context.startService(intent)
+            try {
+                // Check overlay permission first
+                if (!Settings.canDrawOverlays(context)) {
+                    Log.w(TAG, "SYSTEM_ALERT_WINDOW permission not granted")
+                    return
+                }
+                val intent = Intent(context, OverlayService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start OverlayService", e)
+            }
         }
 
         fun hide(context: Context) {
-            context.stopService(Intent(context, OverlayService::class.java))
+            try {
+                context.stopService(Intent(context, OverlayService::class.java))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop OverlayService", e)
+            }
         }
     }
 
@@ -60,11 +74,17 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        isActive = true
-        createNotificationChannel()
-        startForeground(Constants.NOTIFICATION_OVERLAY, buildNotification())
-        showBubble()
+        try {
+            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            isActive = true
+            createNotificationChannel()
+            // Must call startForeground immediately for Android 12+
+            startForeground(Constants.NOTIFICATION_OVERLAY, buildNotification())
+            showBubble()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onCreate", e)
+            stopSelf()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -82,61 +102,73 @@ class OverlayService : Service() {
     private fun showBubble() {
         removeViews()
 
-        val bubbleSize = dpToPx(56)
-        val params = WindowManager.LayoutParams(
-            bubbleSize,
-            bubbleSize,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 200
+        // Double-check overlay permission
+        if (!Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "No overlay permission, stopping")
+            stopSelf()
+            return
         }
 
-        val bubble = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_btn_speak_now)
-            setBackgroundResource(android.R.drawable.btn_default)
-            setOnClickListener { showChatPanel() }
-        }
-
-        // Drag handling
-        var initialX = 0
-        var initialY = 0
-        var initialTouchX = 0f
-        var initialTouchY = 0f
-        var isDragging = false
-
-        bubble.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
-                    isDragging = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - initialTouchX).toInt()
-                    val dy = (event.rawY - initialTouchY).toInt()
-                    if (dx * dx + dy * dy > 100) isDragging = true
-                    params.x = initialX + dx
-                    params.y = initialY + dy
-                    windowManager?.updateViewLayout(bubble, params)
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!isDragging) bubble.performClick()
-                    true
-                }
-                else -> false
+        try {
+            val bubbleSize = dpToPx(56)
+            val params = WindowManager.LayoutParams(
+                bubbleSize,
+                bubbleSize,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 0
+                y = 200
             }
-        }
 
-        bubbleView = bubble
-        windowManager?.addView(bubble, params)
+            val bubble = ImageButton(this).apply {
+                setImageResource(android.R.drawable.ic_btn_speak_now)
+                setBackgroundResource(android.R.drawable.btn_default)
+                setOnClickListener { showChatPanel() }
+            }
+
+            // Drag handling
+            var initialX = 0
+            var initialY = 0
+            var initialTouchX = 0f
+            var initialTouchY = 0f
+            var isDragging = false
+
+            bubble.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = params.x
+                        initialY = params.y
+                        initialTouchX = event.rawX
+                        initialTouchY = event.rawY
+                        isDragging = false
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = (event.rawX - initialTouchX).toInt()
+                        val dy = (event.rawY - initialTouchY).toInt()
+                        if (dx * dx + dy * dy > 100) isDragging = true
+                        params.x = initialX + dx
+                        params.y = initialY + dy
+                        windowManager?.updateViewLayout(bubble, params)
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if (!isDragging) bubble.performClick()
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            bubbleView = bubble
+            windowManager?.addView(bubble, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show bubble", e)
+            stopSelf()
+        }
     }
 
     // ─── Chat Panel (expanded) ────────────────────────────────
@@ -146,112 +178,131 @@ class OverlayService : Service() {
         removeViews()
         isExpanded = true
 
-        val width = dpToPx(300)
-        val height = dpToPx(400)
-        val params = WindowManager.LayoutParams(
-            width,
-            height,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.CENTER
-        }
+        try {
+            val width = dpToPx(300)
+            val height = dpToPx(400)
+            val params = WindowManager.LayoutParams(
+                width,
+                height,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.CENTER
+            }
 
-        // Build chat panel layout programmatically
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF1A1A2E.toInt())
-            setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
-        }
+            val panel = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(0xFF1A1A2E.toInt())
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+            }
 
-        // Header
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val title = TextView(this).apply {
-            text = "Jarvis"
-            setTextColor(0xFFE0E0E0.toInt())
-            textSize = 16f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val collapseBtn = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-            setBackgroundResource(0)
-            setOnClickListener { showBubble() }
-        }
-        header.addView(title)
-        header.addView(collapseBtn)
-        panel.addView(header)
+            // Header
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val title = TextView(this).apply {
+                text = "Jarvis"
+                setTextColor(0xFFE0E0E0.toInt())
+                textSize = 16f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val collapseBtn = ImageButton(this).apply {
+                setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+                setBackgroundResource(0)
+                setOnClickListener { showBubble() }
+            }
+            header.addView(title)
+            header.addView(collapseBtn)
+            panel.addView(header)
 
-        // Message area
-        val messageArea = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        }
-        val messageContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        messageArea.addView(messageContainer)
-        panel.addView(messageArea)
+            // Message area
+            val messageArea = ScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            }
+            val messageContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            messageArea.addView(messageContainer)
+            panel.addView(messageArea)
 
-        // Input area
-        val inputRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        val inputField = EditText(this).apply {
-            hint = "Ask Jarvis..."
-            setTextColor(0xFFE0E0E0.toInt())
-            setHintTextColor(0xFF808080.toInt())
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val sendBtn = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_send)
-            setBackgroundResource(0)
-            setOnClickListener {
-                val msg = inputField.text.toString()
-                if (msg.isNotBlank()) {
-                    inputField.text.clear()
-                    addMessage(messageContainer, "You: $msg")
-                    processOverlayMessage(msg, messageContainer)
+            // Input area
+            val inputRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            val inputField = EditText(this).apply {
+                hint = "Ask Jarvis..."
+                setTextColor(0xFFE0E0E0.toInt())
+                setHintTextColor(0xFF808080.toInt())
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val sendBtn = ImageButton(this).apply {
+                setImageResource(android.R.drawable.ic_menu_send)
+                setBackgroundResource(0)
+                setOnClickListener {
+                    val msg = inputField.text.toString()
+                    if (msg.isNotBlank()) {
+                        inputField.text.clear()
+                        addMessage(messageContainer, "You: $msg")
+                        processOverlayMessage(msg, messageContainer)
+                    }
                 }
             }
-        }
-        inputRow.addView(inputField)
-        inputRow.addView(sendBtn)
-        panel.addView(inputRow)
+            inputRow.addView(inputField)
+            inputRow.addView(sendBtn)
+            panel.addView(inputRow)
 
-        chatPanelView = panel
-        windowManager?.addView(panel, params)
+            chatPanelView = panel
+            windowManager?.addView(panel, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show chat panel", e)
+            showBubble()
+        }
     }
 
     private fun addMessage(container: LinearLayout, text: String) {
-        val tv = TextView(this).apply {
-            this.text = text
-            setTextColor(0xFFE0E0E0.toInt())
-            textSize = 14f
-            setPadding(0, dpToPx(4), 0, dpToPx(4))
+        try {
+            val tv = TextView(this).apply {
+                this.text = text
+                setTextColor(0xFFE0E0E0.toInt())
+                textSize = 14f
+                setPadding(0, dpToPx(4), 0, dpToPx(4))
+            }
+            container.addView(tv)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add message", e)
         }
-        container.addView(tv)
     }
 
     private fun processOverlayMessage(message: String, container: LinearLayout) {
         scope.launch {
-            addMessage(container, "Jarvis: Processing...")
-            // Delegate to the agent loop service
-            AgentLoopService.start(this@OverlayService, message)
+            try {
+                addMessage(container, "Jarvis: Processing...")
+                AgentLoopService.start(this@OverlayService, message)
+            } catch (e: Exception) {
+                addMessage(container, "Jarvis: Error - ${e.message}")
+            }
         }
     }
 
     // ─── Helpers ──────────────────────────────────────────────
 
     private fun removeViews() {
-        bubbleView?.let { windowManager?.removeView(it) }
-        chatPanelView?.let { windowManager?.removeView(it) }
+        try {
+            bubbleView?.let { windowManager?.removeView(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove bubble view", e)
+        }
+        try {
+            chatPanelView?.let { windowManager?.removeView(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove chat panel view", e)
+        }
         bubbleView = null
         chatPanelView = null
         isExpanded = false
@@ -277,12 +328,16 @@ class OverlayService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            Constants.CHANNEL_OVERLAY,
-            "Overlay",
-            NotificationManager.IMPORTANCE_MIN
-        )
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(channel)
+        try {
+            val channel = NotificationChannel(
+                Constants.CHANNEL_OVERLAY,
+                "Overlay",
+                NotificationManager.IMPORTANCE_MIN
+            )
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create notification channel", e)
+        }
     }
 }

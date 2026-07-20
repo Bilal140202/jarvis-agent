@@ -4,8 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.widget.*
 import com.jarvis.agent.R
@@ -13,6 +15,10 @@ import com.jarvis.agent.service.AgentAccessibilityService
 import com.jarvis.agent.util.Preferences
 
 class OnboardingActivity : Activity() {
+
+    companion object {
+        private const val TAG = "OnboardingActivity"
+    }
 
     private var currentStep = 0
     private lateinit var stepDots: List<View>
@@ -24,39 +30,54 @@ class OnboardingActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_onboarding)
+        try {
+            setContentView(R.layout.activity_onboarding)
 
-        contentArea = findViewById(R.id.contentArea)
-        stepDots = listOf(findViewById(R.id.dot0), findViewById(R.id.dot1), findViewById(R.id.dot2))
-        showStep(0)
-        findViewById<Button>(R.id.nextButton).setOnClickListener { nextStep() }
-        findViewById<Button>(R.id.skipButton).setOnClickListener { finishOnboarding() }
+            contentArea = findViewById(R.id.contentArea)
+            stepDots = listOf(findViewById(R.id.dot0), findViewById(R.id.dot1), findViewById(R.id.dot2))
+            showStep(0)
+            findViewById<Button>(R.id.nextButton).setOnClickListener { nextStep() }
+            findViewById<Button>(R.id.skipButton).setOnClickListener { finishOnboarding() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onCreate", e)
+            // If onboarding crashes, just skip it
+            finishOnboarding()
+        }
     }
 
     private fun showStep(step: Int) {
-        currentStep = step
-        stepDots.forEachIndexed { index, view -> view.alpha = if (index == step) 1.0f else 0.3f }
-        contentArea.removeAllViews()
-        when (step) { 0 -> showPermissionsStep(); 1 -> showProviderStep(); 2 -> showReadyStep() }
+        try {
+            currentStep = step
+            stepDots.forEachIndexed { index, view -> view.alpha = if (index == step) 1.0f else 0.3f }
+            contentArea.removeAllViews()
+            when (step) { 0 -> showPermissionsStep(); 1 -> showProviderStep(); 2 -> showReadyStep() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing step $step", e)
+        }
     }
 
     private fun nextStep() {
-        if (currentStep == 1) {
-            val apiKey = apiKeyInput.text.toString().trim()
-            val baseUrl = baseUrlInput.text.toString().trim()
-            val model = modelInput.text.toString().trim()
-            if (apiKey.isBlank()) { apiKeyInput.error = "API key required"; return }
-            if (baseUrl.isBlank()) { baseUrlInput.error = "Base URL required"; return }
-            if (model.isBlank()) { modelInput.error = "Model required"; return }
-            Preferences.apiKey = apiKey; Preferences.baseUrl = baseUrl; Preferences.model = model
-            when (providerSpinner.selectedItemPosition) {
-                1 -> { Preferences.openaiApiKey = apiKey; Preferences.openaiModel = model; Preferences.providerPreset = "openai" }
-                2 -> { Preferences.deepseekApiKey = apiKey; Preferences.deepseekModel = model; Preferences.providerPreset = "deepseek" }
-                3 -> { Preferences.openrouterApiKey = apiKey; Preferences.openrouterModel = model; Preferences.providerPreset = "openrouter" }
-                4 -> { Preferences.nimApiKey = apiKey; Preferences.nimModel = model; Preferences.providerPreset = "nvidia_nim" }
+        try {
+            if (currentStep == 1) {
+                val apiKey = apiKeyInput.text.toString().trim()
+                val baseUrl = baseUrlInput.text.toString().trim()
+                val model = modelInput.text.toString().trim()
+                if (apiKey.isBlank()) { apiKeyInput.error = "API key required"; return }
+                if (baseUrl.isBlank()) { baseUrlInput.error = "Base URL required"; return }
+                if (model.isBlank()) { modelInput.error = "Model required"; return }
+                Preferences.apiKey = apiKey; Preferences.baseUrl = baseUrl; Preferences.model = model
+                when (providerSpinner.selectedItemPosition) {
+                    1 -> { Preferences.openaiApiKey = apiKey; Preferences.openaiModel = model; Preferences.providerPreset = "openai" }
+                    2 -> { Preferences.deepseekApiKey = apiKey; Preferences.deepseekModel = model; Preferences.providerPreset = "deepseek" }
+                    3 -> { Preferences.openrouterApiKey = apiKey; Preferences.openrouterModel = model; Preferences.providerPreset = "openrouter" }
+                    4 -> { Preferences.nimApiKey = apiKey; Preferences.nimModel = model; Preferences.providerPreset = "nvidia_nim" }
+                }
             }
+            if (currentStep < 2) showStep(currentStep + 1) else finishOnboarding()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in nextStep", e)
+            finishOnboarding()
         }
-        if (currentStep < 2) showStep(currentStep + 1) else finishOnboarding()
     }
 
     private fun showPermissionsStep() {
@@ -102,7 +123,16 @@ class OnboardingActivity : Activity() {
     }
 
     private fun requestAllPermissions() {
-        val perms = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE, Manifest.permission.SEND_SMS)
+        val perms = mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.SEND_SMS
+        )
+        // Add POST_NOTIFICATIONS for Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
         val needed = perms.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), 0)
     }

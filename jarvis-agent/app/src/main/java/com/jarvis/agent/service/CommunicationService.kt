@@ -3,6 +3,7 @@ package com.jarvis.agent.service
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.ContactsContract
 import android.telephony.SmsManager
 import android.util.Log
@@ -53,7 +54,6 @@ class CommunicationService(private val context: Context) {
     fun sendSms(contactName: String, message: String): Boolean {
         val contacts = searchContacts(contactName)
         if (contacts.isEmpty()) {
-            // Try direct number
             if (contactName.matches(Regex("[+]?\\d{7,15}"))) {
                 return sendSmsDirect(contactName, message)
             }
@@ -65,12 +65,12 @@ class CommunicationService(private val context: Context) {
 
     private fun sendSmsDirect(phoneNumber: String, message: String): Boolean {
         return try {
-            val smsManager = SmsManager.getDefault()
+            val smsManager = getSmsManager()
             smsManager.sendTextMessage(phoneNumber, null, message, null, null)
             Log.i(TAG, "SMS sent to $phoneNumber")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "SMS failed", e)
+            Log.e(TAG, "SMS failed, trying intent fallback", e)
             // Fallback: open SMS app
             try {
                 val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$phoneNumber")).apply {
@@ -80,8 +80,21 @@ class CommunicationService(private val context: Context) {
                 context.startActivity(intent)
                 true
             } catch (e2: Exception) {
+                Log.e(TAG, "SMS intent fallback also failed", e2)
                 false
             }
+        }
+    }
+
+    /**
+     * Get SmsManager compatible with API 31+.
+     */
+    private fun getSmsManager(): SmsManager {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(SmsManager::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            SmsManager.getDefault()
         }
     }
 

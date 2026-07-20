@@ -4,7 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.util.Log
 import android.view.Gravity
@@ -28,13 +30,14 @@ import kotlinx.coroutines.launch
 
 /**
  * Main Chat Activity — the primary user interface.
- * Uses native Android ListView (no AndroidX dependency).
  */
 class ChatActivity : android.app.Activity() {
 
     companion object {
         private const val TAG = "ChatActivity"
         private const val REQUEST_RECORD_AUDIO = 1001
+        private const val REQUEST_OVERLAY = 1002
+        private const val REQUEST_NOTIFICATIONS = 1003
     }
 
     private lateinit var messageList: ListView
@@ -49,7 +52,7 @@ class ChatActivity : android.app.Activity() {
     private val messages = mutableListOf<ChatMessage>()
     private lateinit var chatAdapter: MessageListAdapter
     private val llmClient = LlmClient()
-    private val voiceService by lazy { VoiceService(this) }
+    private var voiceService: VoiceService? = null
     private val scope = CoroutineScope(Dispatchers.Main)
     private var isAgentMode = true
     private var isProcessing = false
@@ -57,15 +60,19 @@ class ChatActivity : android.app.Activity() {
 
     private val taskReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Constants.ACTION_TASK_COMPLETE,
-                Constants.ACTION_TASK_UPDATE -> {
-                    val msg = intent.getStringExtra(Constants.EXTRA_TASK_MESSAGE) ?: ""
-                    val status = intent.getStringExtra(Constants.EXTRA_TASK_STATUS) ?: ""
-                    addAssistantMessage("${if (status == "success") "OK" else "X"} $msg")
-                    isProcessing = false
-                    progressBar.visibility = View.GONE
+            try {
+                when (intent?.action) {
+                    Constants.ACTION_TASK_COMPLETE,
+                    Constants.ACTION_TASK_UPDATE -> {
+                        val msg = intent.getStringExtra(Constants.EXTRA_TASK_MESSAGE) ?: ""
+                        val status = intent.getStringExtra(Constants.EXTRA_TASK_STATUS) ?: ""
+                        addAssistantMessage("${if (status == "success") "OK" else "X"} $msg")
+                        isProcessing = false
+                        progressBar.visibility = View.GONE
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in taskReceiver", e)
             }
         }
     }
@@ -73,68 +80,99 @@ class ChatActivity : android.app.Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (!Preferences.onboardingCompleted || !Preferences.isConfigured()) {
-            startActivity(Intent(this, OnboardingActivity::class.java))
-            finish()
-            return
-        }
-
-        setContentView(R.layout.activity_main)
-
-        messageList = findViewById(R.id.messageList)
-        messageInput = findViewById(R.id.messageInput)
-        sendButton = findViewById(R.id.sendButton)
-        voiceButton = findViewById(R.id.voiceButton)
-        statusIndicator = findViewById(R.id.statusIndicator)
-        statusText = findViewById(R.id.statusText)
-        modeToggle = findViewById(R.id.modeToggle)
-        progressBar = findViewById(R.id.progressBar)
-
-        chatAdapter = MessageListAdapter(this, messages)
-        messageList.adapter = chatAdapter
-
-        modeToggle.setOnCheckedChangeListener { _, isChecked ->
-            isAgentMode = !isChecked
-            Toast.makeText(this, "Mode: ${if (isAgentMode) "Agent" else "Chat"}", Toast.LENGTH_SHORT).show()
-        }
-
-        sendButton.setOnClickListener { sendMessage() }
-
-        voiceButton.setOnClickListener {
-            if (SpeechRecognizer.isRecognitionAvailable(this)) {
-                startVoiceInput()
+        try {
+            // Check if onboarding needed
+            if (!Preferences.onboardingCompleted || !Preferences.isConfigured()) {
+                startActivity(Intent(this, OnboardingActivity::class.java))
+                finish()
+                return
             }
-        }
 
-        voiceService.initTts()
-        addAssistantMessage("Hello! I'm Jarvis, your Android assistant. How can I help you today?")
+            setContentView(R.layout.activity_main)
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(taskReceiver, IntentFilter().apply {
-                addAction(Constants.ACTION_TASK_COMPLETE)
-                addAction(Constants.ACTION_TASK_UPDATE)
-            }, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(taskReceiver, IntentFilter().apply {
-                addAction(Constants.ACTION_TASK_COMPLETE)
-                addAction(Constants.ACTION_TASK_UPDATE)
-            })
-        }
+            messageList = findViewById(R.id.messageList)
+            messageInput = findViewById(R.id.messageInput)
+            sendButton = findViewById(R.id.sendButton)
+            voiceButton = findViewById(R.id.voiceButton)
+            statusIndicator = findViewById(R.id.statusIndicator)
+            statusText = findViewById(R.id.statusText)
+            modeToggle = findViewById(R.id.modeToggle)
+            progressBar = findViewById(R.id.progressBar)
 
-        if (Preferences.overlayEnabled) {
-            OverlayService.show(this)
+            chatAdapter = MessageListAdapter(this, messages)
+            messageList.adapter = chatAdapter
+
+            modeToggle.setOnCheckedChangeListener { _, isChecked ->
+                isAgentMode = !isChecked
+                Toast.makeText(this, "Mode: ${if (isAgentMode) "Agent" else "Chat"}", Toast.LENGTH_SHORT).show()
+            }
+
+            sendButton.setOnClickListener { sendMessage() }
+
+            voiceButton.setOnClickListener {
+                if (SpeechRecognizer.isRecognitionAvailable(this)) {
+                    startVoiceInput()
+                }
+            }
+
+            // Initialize voice safely
+            try {
+                voiceService = VoiceService(this)
+                voiceService?.initTts()
+            } catch (e: Exception) {
+                Log.e(TAG, "TTS init failed", e)
+            }
+
+            addAssistantMessage("Hello! I'm Jarvis, your Android assistant. How can I help you today?")
+
+            // Register broadcast receiver safely
+            try {
+                val filter = IntentFilter().apply {
+                    addAction(Constants.ACTION_TASK_COMPLETE)
+                    addAction(Constants.ACTION_TASK_UPDATE)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(taskReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    registerReceiver(taskReceiver, filter)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to register receiver", e)
+            }
+
+            // Request POST_NOTIFICATIONS permission for Android 13+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestPermissions(
+                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                        REQUEST_NOTIFICATIONS
+                    )
+                }
+            }
+
+            // Don't auto-start overlay — let user enable it manually
+            // Overlay requires SYSTEM_ALERT_WINDOW permission which must be granted in Settings
+        } catch (e: Exception) {
+            Log.e(TAG, "Fatal error in onCreate", e)
+            Toast.makeText(this, "Error starting Jarvis: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     override fun onResume() {
         super.onResume()
-        updateServiceStatus()
+        try {
+            updateServiceStatus()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onResume", e)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try { unregisterReceiver(taskReceiver) } catch (_: Exception) {}
-        voiceService.destroy()
+        try { voiceService?.destroy() } catch (_: Exception) {}
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -149,11 +187,24 @@ class ChatActivity : android.app.Activity() {
                 true
             }
             R.id.action_overlay -> {
-                if (OverlayService.isActive) OverlayService.hide(this) else OverlayService.show(this)
+                try {
+                    if (!Settings.canDrawOverlays(this)) {
+                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                        intent.data = android.net.Uri.parse("package:$packageName")
+                        startActivity(intent)
+                        Toast.makeText(this, "Grant overlay permission, then try again", Toast.LENGTH_LONG).show()
+                    } else if (OverlayService.isActive) {
+                        OverlayService.hide(this)
+                    } else {
+                        OverlayService.show(this)
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Overlay error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
                 true
             }
             R.id.action_accessibility -> {
-                startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -191,7 +242,7 @@ class ChatActivity : android.app.Activity() {
                 val result = actionHandler.execute(routeAction)
                 val resultMsg = result.details ?: if (result.success) "Done!" else "Something went wrong."
                 addAssistantMessage(resultMsg)
-                if (Preferences.voiceEnabled && result.success) voiceService.speak(resultMsg)
+                if (Preferences.voiceEnabled && result.success) voiceService?.speak(resultMsg)
             } catch (e: Exception) {
                 addAssistantMessage("Error: ${e.message}")
             } finally {
@@ -211,7 +262,7 @@ class ChatActivity : android.app.Activity() {
                     chatHistory.add(ChatMessage("user", text))
                     chatHistory.add(ChatMessage("assistant", response))
                     addAssistantMessage(response)
-                    if (Preferences.voiceEnabled) voiceService.speak(response)
+                    if (Preferences.voiceEnabled) voiceService?.speak(response)
                 } else {
                     addAssistantMessage("Could not generate a response. Check your API settings.")
                 }
@@ -231,7 +282,7 @@ class ChatActivity : android.app.Activity() {
         }
         scope.launch {
             try {
-                val text = voiceService.listen()
+                val text = voiceService?.listen() ?: ""
                 if (text.isNotBlank()) { messageInput.setText(text); sendMessage() }
             } catch (e: Exception) {
                 Toast.makeText(this@ChatActivity, "Voice failed: ${e.message}", Toast.LENGTH_SHORT).show()

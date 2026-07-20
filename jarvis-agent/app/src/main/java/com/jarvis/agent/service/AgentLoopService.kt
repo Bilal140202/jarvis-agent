@@ -7,12 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import com.jarvis.agent.R
 import com.jarvis.agent.agent.ActionHandler
 import com.jarvis.agent.llm.LlmClient
-import com.jarvis.agent.llm.RouteAction
 import com.jarvis.agent.ui.ChatActivity
 import com.jarvis.agent.util.Constants
 import com.jarvis.agent.util.Preferences
@@ -20,9 +19,6 @@ import kotlinx.coroutines.*
 
 /**
  * Foreground Service that runs the agent loop.
- *
- * Keeps the agent alive while executing long-running tasks.
- * Shows a persistent notification with task status.
  */
 class AgentLoopService : Service() {
 
@@ -38,15 +34,27 @@ class AgentLoopService : Service() {
             private set
 
         fun start(context: Context, goal: String) {
-            val intent = Intent(context, AgentLoopService::class.java).apply {
-                action = ACTION_START_TASK
-                putExtra(EXTRA_TASK_GOAL, goal)
+            try {
+                val intent = Intent(context, AgentLoopService::class.java).apply {
+                    action = ACTION_START_TASK
+                    putExtra(EXTRA_TASK_GOAL, goal)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start AgentLoopService", e)
             }
-            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, AgentLoopService::class.java))
+            try {
+                context.stopService(Intent(context, AgentLoopService::class.java))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop AgentLoopService", e)
+            }
         }
     }
 
@@ -56,22 +64,36 @@ class AgentLoopService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        isRunning = true
+        try {
+            createNotificationChannel()
+            isRunning = true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onCreate", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START_TASK -> {
-                val goal = intent.getStringExtra(EXTRA_TASK_GOAL) ?: return START_NOT_STICKY
-                currentTask = goal
-                startForeground(Constants.NOTIFICATION_AGENT_LOOP, buildNotification("Running: $goal"))
-                executeTask(goal)
+        try {
+            when (intent?.action) {
+                ACTION_START_TASK -> {
+                    val goal = intent.getStringExtra(EXTRA_TASK_GOAL) ?: return START_NOT_STICKY
+                    currentTask = goal
+                    startForeground(Constants.NOTIFICATION_AGENT_LOOP, buildNotification("Running: $goal"))
+                    executeTask(goal)
+                }
+                ACTION_CANCEL_TASK -> {
+                    taskJob?.cancel()
+                    stopSelf()
+                }
+                else -> {
+                    // Unknown or null intent — stop immediately to avoid ANR
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
             }
-            ACTION_CANCEL_TASK -> {
-                taskJob?.cancel()
-                stopSelf()
-            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onStartCommand", e)
+            stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -90,7 +112,6 @@ class AgentLoopService : Service() {
             try {
                 updateNotification("Analyzing: $goal")
 
-                // Route through LLM first
                 val routeAction = llmClient.sendRouteMessage(goal)
                 if (routeAction == null) {
                     broadcastResult("Failed to understand the request", false)
@@ -100,7 +121,6 @@ class AgentLoopService : Service() {
 
                 updateNotification("Executing: ${routeAction.action}")
 
-                // Execute the routed action
                 val actionHandler = ActionHandler(this@AgentLoopService)
                 val result = actionHandler.execute(routeAction)
 
@@ -117,17 +137,25 @@ class AgentLoopService : Service() {
     }
 
     private fun broadcastResult(message: String, success: Boolean) {
-        val intent = Intent(if (success) Constants.ACTION_TASK_COMPLETE else Constants.ACTION_TASK_UPDATE).apply {
-            putExtra(Constants.EXTRA_TASK_MESSAGE, message)
-            putExtra(Constants.EXTRA_TASK_STATUS, if (success) "success" else "error")
-            setPackage(packageName)
+        try {
+            val intent = Intent(if (success) Constants.ACTION_TASK_COMPLETE else Constants.ACTION_TASK_UPDATE).apply {
+                putExtra(Constants.EXTRA_TASK_MESSAGE, message)
+                putExtra(Constants.EXTRA_TASK_STATUS, if (success) "success" else "error")
+                setPackage(packageName)
+            }
+            sendBroadcast(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to broadcast result", e)
         }
-        sendBroadcast(intent)
     }
 
     private fun updateNotification(text: String) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(Constants.NOTIFICATION_AGENT_LOOP, buildNotification(text))
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(Constants.NOTIFICATION_AGENT_LOOP, buildNotification(text))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update notification", e)
+        }
     }
 
     private fun buildNotification(text: String): Notification {
@@ -154,20 +182,21 @@ class AgentLoopService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            Constants.CHANNEL_AGENT_LOOP,
-            "Agent Tasks",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Shows when Jarvis is executing a task"
+        try {
+            val channel = NotificationChannel(
+                Constants.CHANNEL_AGENT_LOOP,
+                "Agent Tasks",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows when Jarvis is executing a task"
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create notification channel", e)
         }
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(channel)
     }
 
-    /**
-     * Helper class to provide a CoroutineScope tied to the service lifecycle.
-     */
     private class CoroutineService(dispatcher: CoroutineDispatcher) : CoroutineScope {
         override val coroutineContext = dispatcher + SupervisorJob()
     }
