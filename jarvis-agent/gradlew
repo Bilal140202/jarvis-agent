@@ -7,5 +7,5 @@ if [ ! -f "$CLASSPATH" ]; then
     echo "Gradle wrapper not found, using installed gradle..."
 fi
 export ANDROID_HOME=/home/z/android-sdk
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export JAVA_HOME=/home/z/my-project/jdk/jdk-21.0.2
 exec $JAVA_HOME/bin/java -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

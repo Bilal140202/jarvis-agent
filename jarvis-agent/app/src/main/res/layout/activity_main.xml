@@ -12,32 +12,47 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <!-- Status Bar -->
+        <!-- Top Bar -->
         <LinearLayout
-            android:id="@+id/statusBar"
+            android:id="@+id/topBar"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:orientation="horizontal"
-            android:padding="8dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="8dp"
             android:gravity="center_vertical"
             android:background="#1A1A2E">
 
+            <!-- Hamburger Menu Button -->
+            <ImageButton
+                android:id="@+id/menuButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:src="@android:drawable/ic_menu_sort_by_size"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Menu"
+                android:scaleType="centerInside"
+                android:padding="10dp" />
+
+            <!-- Status Indicator -->
             <View
                 android:id="@+id/statusIndicator"
-                android:layout_width="10dp"
-                android:layout_height="10dp"
-                android:background="@android:drawable/presence_offline" />
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:background="@android:drawable/presence_offline"
+                android:layout_marginStart="4dp" />
 
             <TextView
                 android:id="@+id/statusText"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="6dp"
                 android:text="Not Connected"
                 android:textColor="#808080"
                 android:textSize="12sp" />
 
+            <!-- Mode Toggle -->
             <ToggleButton
                 android:id="@+id/modeToggle"
                 android:layout_width="wrap_content"
@@ -50,10 +65,22 @@
 
             <ProgressBar
                 android:id="@+id/progressBar"
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:layout_marginStart="8dp"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_marginStart="6dp"
                 android:visibility="gone" />
+
+            <!-- Task History Icon Button -->
+            <ImageButton
+                android:id="@+id/taskHistoryButton"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:src="@android:drawable/ic_menu_recent_history"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Task History"
+                android:scaleType="centerInside"
+                android:padding="8dp"
+                android:layout_marginStart="6dp" />
         </LinearLayout>
 
         <!-- Chat Messages -->
@@ -68,57 +95,6 @@
             android:dividerHeight="4dp"
             android:stackFromBottom="true"
             android:transcriptMode="alwaysScroll" />
-
-        <!-- Task History Toggle Button -->
-        <LinearLayout
-            android:id="@+id/taskHistoryBar"
-            android:layout_width="match_parent"
-            android:layout_height="36dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:background="#12122A"
-            android:clickable="true"
-            android:focusable="true">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Task History"
-                android:textColor="#808080"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/taskCountBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0"
-                android:textColor="#6C63FF"
-                android:textSize="11sp"
-                android:paddingStart="6dp"
-                android:paddingEnd="6dp"
-                android:background="#1A1A2E"
-                android:layout_marginEnd="8dp" />
-
-            <TextView
-                android:id="@+id/starredCountBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="★ 0"
-                android:textColor="#FFD700"
-                android:textSize="11sp"
-                android:paddingStart="6dp"
-                android:paddingEnd="6dp"
-                android:background="#1A1A2E"
-                android:layout_marginEnd="4dp" />
-
-            <View
-                android:layout_width="12dp"
-                android:layout_height="12dp"
-                android:background="@android:drawable/arrow_up_float" />
-        </LinearLayout>
 
         <!-- Input Bar -->
         <LinearLayout
@@ -163,7 +139,268 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Task History Drawer (slides up from bottom) -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Side Menu Drawer (slides from left) -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <FrameLayout
+        android:id="@+id/menuOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#AA000000"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:id="@+id/menuDrawer"
+            android:layout_width="280dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="start"
+            android:orientation="vertical"
+            android:background="#0F0F1A"
+            android:paddingTop="16dp">
+
+            <!-- Menu Header -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingBottom="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Jarvis"
+                    android:textColor="#6C63FF"
+                    android:textSize="22sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Your Android Assistant"
+                    android:textColor="#808080"
+                    android:textSize="12sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#2A2A4E" />
+
+            <!-- Menu Items -->
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <!-- Settings -->
+                    <LinearLayout
+                        android:id="@+id/menuSettings"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="20dp"
+                        android:paddingEnd="20dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackground">
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:src="@android:drawable/ic_menu_preferences"
+                            android:scaleType="centerInside" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Settings"
+                            android:textColor="#E0E0E0"
+                            android:textSize="15sp"
+                            android:layout_marginStart="16dp" />
+                    </LinearLayout>
+
+                    <!-- Agent Steps -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingStart="20dp"
+                        android:paddingEnd="20dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="8dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Max Agent Steps"
+                            android:textColor="#E0E0E0"
+                            android:textSize="14sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="4dp">
+
+                            <SeekBar
+                                android:id="@+id/maxStepsSlider"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:max="100"
+                                android:progress="25"
+                                android:thumbTint="#6C63FF"
+                                android:progressTint="#6C63FF" />
+
+                            <TextView
+                                android:id="@+id/maxStepsValue"
+                                android:layout_width="36dp"
+                                android:layout_height="wrap_content"
+                                android:text="25"
+                                android:textColor="#6C63FF"
+                                android:textSize="14sp"
+                                android:gravity="center" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#1A1A2E" />
+
+                    <!-- Accessibility Settings -->
+                    <LinearLayout
+                        android:id="@+id/menuAccessibility"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="20dp"
+                        android:paddingEnd="20dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackground">
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:src="@android:drawable/ic_menu_preferences"
+                            android:scaleType="centerInside" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Accessibility Settings"
+                            android:textColor="#E0E0E0"
+                            android:textSize="15sp"
+                            android:layout_marginStart="16dp" />
+                    </LinearLayout>
+
+                    <!-- Overlay Toggle -->
+                    <LinearLayout
+                        android:id="@+id/menuOverlayToggle"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="20dp"
+                        android:paddingEnd="20dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackground">
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:src="@android:drawable/ic_menu_manage"
+                            android:scaleType="centerInside" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Floating Overlay"
+                            android:textColor="#E0E0E0"
+                            android:textSize="15sp"
+                            android:layout_marginStart="16dp" />
+
+                        <TextView
+                            android:id="@+id/overlayStatusText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="OFF"
+                            android:textColor="#808080"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#1A1A2E" />
+
+                    <!-- About -->
+                    <LinearLayout
+                        android:id="@+id/menuAbout"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="20dp"
+                        android:paddingEnd="20dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:background="?android:attr/selectableItemBackground">
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:src="@android:drawable/ic_menu_info_details"
+                            android:scaleType="centerInside" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="About Jarvis"
+                            android:textColor="#E0E0E0"
+                            android:textSize="15sp"
+                            android:layout_marginStart="16dp" />
+                    </LinearLayout>
+
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- Menu Footer -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#2A2A4E" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:padding="12dp"
+                android:text="Jarvis Agent v1.0.0"
+                android:textColor="#505050"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Task History Drawer (slides from right) -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
     <FrameLayout
         android:id="@+id/taskHistoryOverlay"
         android:layout_width="match_parent"
@@ -177,7 +414,7 @@
             android:id="@+id/taskHistoryDrawer"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_gravity="bottom"
+            android:layout_gravity="end"
             android:orientation="vertical"
             android:background="#0F0F1A"
             android:paddingTop="16dp">
@@ -205,7 +442,7 @@
                     android:id="@+id/drawerStarredCount"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="★ Starred: 0"
+                    android:text="Starred: 0"
                     android:textColor="#FFD700"
                     android:textSize="13sp"
                     android:layout_marginEnd="12dp" />
@@ -229,7 +466,7 @@
                 android:paddingEnd="16dp"
                 android:paddingTop="8dp"
                 android:paddingBottom="4dp"
-                android:text="★ Saved Forever"
+                android:text="Saved Forever"
                 android:textColor="#FFD700"
                 android:textSize="13sp"
                 android:visibility="gone" />
@@ -287,7 +524,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="center"
                 android:padding="12dp"
-                android:text="Star a task to save it forever • Unstarred tasks expire in 24h or after 5 tasks"
+                android:text="Star a task to save it forever. Unstarred tasks expire in 24h or after 5 tasks."
                 android:textColor="#505050"
                 android:textSize="11sp" />
         </LinearLayout>

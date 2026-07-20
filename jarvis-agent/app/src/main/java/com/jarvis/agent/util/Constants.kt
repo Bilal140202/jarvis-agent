@@ -7,8 +7,10 @@ object Constants {
 
     const val CHANNEL_AGENT_LOOP = "jarvis_agent_loop"
     const val CHANNEL_OVERLAY = "jarvis_overlay"
+    const val CHANNEL_BG_SERVICE = "jarvis_bg_service"
     const val NOTIFICATION_AGENT_LOOP = 1001
     const val NOTIFICATION_OVERLAY = 1002
+    const val NOTIFICATION_BG_SERVICE = 1003
 
     // Broadcast actions
     const val ACTION_TASK_UPDATE = "com.jarvis.agent.TASK_UPDATE"

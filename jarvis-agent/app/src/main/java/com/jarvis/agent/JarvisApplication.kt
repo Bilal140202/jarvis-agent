@@ -40,8 +40,18 @@ class JarvisApplication : Application() {
                 NotificationManager.IMPORTANCE_MIN
             )
 
+            val bgChannel = NotificationChannel(
+                Constants.CHANNEL_BG_SERVICE,
+                "Jarvis Background",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps Jarvis running in the background"
+                setShowBadge(false)
+            }
+
             nm.createNotificationChannel(agentChannel)
             nm.createNotificationChannel(overlayChannel)
+            nm.createNotificationChannel(bgChannel)
         } catch (e: Exception) {
             Log.e("JarvisApp", "Failed to create notification channels", e)
         }

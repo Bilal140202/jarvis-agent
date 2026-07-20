@@ -72,6 +72,12 @@
             android:exported="false"
             android:foregroundServiceType="specialUse" />
 
+        <!-- Background Service (permanent notification) -->
+        <service
+            android:name=".service.JarvisBackgroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
         <!-- Overlay Service (floating bubble) -->
         <service
             android:name=".service.OverlayService"

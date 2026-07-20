@@ -11,10 +11,12 @@ import android.speech.SpeechRecognizer
 import android.text.format.DateUtils
 import android.util.Log
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.*
 import com.jarvis.agent.R
 import com.jarvis.agent.agent.ActionHandler
@@ -22,6 +24,7 @@ import com.jarvis.agent.llm.ChatMessage
 import com.jarvis.agent.llm.LlmClient
 import com.jarvis.agent.service.AgentAccessibilityService
 import com.jarvis.agent.service.AgentLoopService
+import com.jarvis.agent.service.JarvisBackgroundService
 import com.jarvis.agent.service.OverlayService
 import com.jarvis.agent.service.VoiceService
 import com.jarvis.agent.util.Constants
@@ -53,11 +56,21 @@ class ChatActivity : android.app.Activity() {
     private lateinit var statusText: TextView
     private lateinit var modeToggle: ToggleButton
     private lateinit var progressBar: ProgressBar
+    private lateinit var menuButton: ImageButton
+    private lateinit var taskHistoryButton: ImageButton
+
+    // Side Menu UI
+    private lateinit var menuOverlay: FrameLayout
+    private lateinit var menuDrawer: LinearLayout
+    private lateinit var maxStepsSlider: SeekBar
+    private lateinit var maxStepsValue: TextView
+    private lateinit var menuSettings: LinearLayout
+    private lateinit var menuAccessibility: LinearLayout
+    private lateinit var menuOverlayToggle: LinearLayout
+    private lateinit var overlayStatusText: TextView
+    private lateinit var menuAbout: LinearLayout
 
     // Task History UI
-    private lateinit var taskHistoryBar: LinearLayout
-    private lateinit var taskCountBadge: TextView
-    private lateinit var starredCountBadge: TextView
     private lateinit var taskHistoryOverlay: FrameLayout
     private lateinit var taskHistoryDrawer: LinearLayout
     private lateinit var closeDrawerButton: ImageButton
@@ -76,7 +89,8 @@ class ChatActivity : android.app.Activity() {
     private var isAgentMode = true
     private var isProcessing = false
     private val chatHistory = mutableListOf<ChatMessage>()
-    private var isDrawerOpen = false
+    private var isTaskDrawerOpen = false
+    private var isMenuOpen = false
 
     // Track last task for saving to history
     private var lastTaskText: String? = null
@@ -93,12 +107,17 @@ class ChatActivity : android.app.Activity() {
                         isProcessing = false
                         progressBar.visibility = View.GONE
 
+                        // Update background service notification
+                        JarvisBackgroundService.updateStatus(
+                            this@ChatActivity,
+                            if (status == "success") "Done: ${msg.take(40)}" else "Error: ${msg.take(40)}"
+                        )
+
                         // Save task to history
                         val taskText = lastTaskText
                         if (taskText != null) {
                             TaskHistoryManager.saveTask(taskText, msg)
                             lastTaskText = null
-                            refreshTaskBadges()
                         }
                     }
                 }
@@ -121,7 +140,7 @@ class ChatActivity : android.app.Activity() {
 
             setContentView(R.layout.activity_main)
 
-            // Chat UI bindings
+            // ── Chat UI ──
             messageList = findViewById(R.id.messageList)
             messageInput = findViewById(R.id.messageInput)
             sendButton = findViewById(R.id.sendButton)
@@ -130,11 +149,21 @@ class ChatActivity : android.app.Activity() {
             statusText = findViewById(R.id.statusText)
             modeToggle = findViewById(R.id.modeToggle)
             progressBar = findViewById(R.id.progressBar)
+            menuButton = findViewById(R.id.menuButton)
+            taskHistoryButton = findViewById(R.id.taskHistoryButton)
 
-            // Task History UI bindings
-            taskHistoryBar = findViewById(R.id.taskHistoryBar)
-            taskCountBadge = findViewById(R.id.taskCountBadge)
-            starredCountBadge = findViewById(R.id.starredCountBadge)
+            // ── Side Menu UI ──
+            menuOverlay = findViewById(R.id.menuOverlay)
+            menuDrawer = findViewById(R.id.menuDrawer)
+            maxStepsSlider = findViewById(R.id.maxStepsSlider)
+            maxStepsValue = findViewById(R.id.maxStepsValue)
+            menuSettings = findViewById(R.id.menuSettings)
+            menuAccessibility = findViewById(R.id.menuAccessibility)
+            menuOverlayToggle = findViewById(R.id.menuOverlayToggle)
+            overlayStatusText = findViewById(R.id.overlayStatusText)
+            menuAbout = findViewById(R.id.menuAbout)
+
+            // ── Task History UI ──
             taskHistoryOverlay = findViewById(R.id.taskHistoryOverlay)
             taskHistoryDrawer = findViewById(R.id.taskHistoryDrawer)
             closeDrawerButton = findViewById(R.id.closeDrawerButton)
@@ -154,19 +183,100 @@ class ChatActivity : android.app.Activity() {
                 Toast.makeText(this, "Mode: ${if (isAgentMode) "Agent" else "Chat"}", Toast.LENGTH_SHORT).show()
             }
 
+            // Send button
             sendButton.setOnClickListener { sendMessage() }
 
+            // Enter key sends message
+            messageInput.setOnEditorActionListener { _, actionId, event ->
+                if (actionId == EditorInfo.IME_ACTION_SEND ||
+                    (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER && event.isCtrlPressed.not())
+                ) {
+                    // Only send on Enter (not Shift+Enter for multiline)
+                    if (event == null || !event.isShiftPressed) {
+                        sendMessage()
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+
+            // Also handle raw key events for hardware keyboards
+            messageInput.setOnKeyListener { _, keyCode, event ->
+                if (keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN && !event.isShiftPressed) {
+                    sendMessage()
+                    true
+                } else {
+                    false
+                }
+            }
+
+            // Voice button
             voiceButton.setOnClickListener {
                 if (SpeechRecognizer.isRecognitionAvailable(this)) {
                     startVoiceInput()
                 }
             }
 
-            // Task History drawer logic
-            taskHistoryBar.setOnClickListener { openTaskDrawer() }
+            // ── Menu Drawer ──
+            menuButton.setOnClickListener { openMenuDrawer() }
+            menuOverlay.setOnClickListener { closeMenuDrawer() }
+            menuDrawer.setOnClickListener { /* consume clicks */ }
+
+            // Max steps slider
+            maxStepsSlider.progress = Preferences.maxSteps
+            maxStepsValue.text = Preferences.maxSteps.toString()
+            maxStepsSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val steps = if (progress < 5) 5 else progress
+                    maxStepsValue.text = steps.toString()
+                    if (fromUser) Preferences.maxSteps = steps
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+
+            // Menu item clicks
+            menuSettings.setOnClickListener {
+                closeMenuDrawer()
+                startActivity(Intent(this, SettingsActivity::class.java))
+            }
+
+            menuAccessibility.setOnClickListener {
+                closeMenuDrawer()
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+
+            menuOverlayToggle.setOnClickListener {
+                closeMenuDrawer()
+                try {
+                    if (!Settings.canDrawOverlays(this)) {
+                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                        intent.data = android.net.Uri.parse("package:$packageName")
+                        startActivity(intent)
+                        Toast.makeText(this, "Grant overlay permission, then try again", Toast.LENGTH_LONG).show()
+                    } else if (OverlayService.isActive) {
+                        OverlayService.hide(this)
+                    } else {
+                        OverlayService.show(this)
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Overlay error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            menuAbout.setOnClickListener {
+                closeMenuDrawer()
+                Toast.makeText(this, "Jarvis Agent v1.0.0\nYour Android Assistant", Toast.LENGTH_LONG).show()
+            }
+
+            // ── Task History Drawer ──
+            taskHistoryButton.setOnClickListener { openTaskDrawer() }
             closeDrawerButton.setOnClickListener { closeTaskDrawer() }
             taskHistoryOverlay.setOnClickListener { closeTaskDrawer() }
-            taskHistoryDrawer.setOnClickListener { /* consume clicks to prevent closing */ }
+            taskHistoryDrawer.setOnClickListener { /* consume clicks */ }
 
             // Initialize voice safely
             try {
@@ -180,7 +290,9 @@ class ChatActivity : android.app.Activity() {
 
             // Cleanup expired tasks on start
             TaskHistoryManager.cleanupExpired()
-            refreshTaskBadges()
+
+            // Start background service for permanent notification
+            startBackgroundService()
 
             // Register broadcast receiver safely
             try {
@@ -219,7 +331,11 @@ class ChatActivity : android.app.Activity() {
         try {
             updateServiceStatus()
             TaskHistoryManager.cleanupExpired()
-            refreshTaskBadges()
+            overlayStatusText.text = if (OverlayService.isActive) "ON" else "OFF"
+            // Ensure background service is running
+            if (!JarvisBackgroundService.isRunning) {
+                startBackgroundService()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error in onResume", e)
         }
@@ -229,42 +345,16 @@ class ChatActivity : android.app.Activity() {
         super.onDestroy()
         try { unregisterReceiver(taskReceiver) } catch (_: Exception) {}
         try { voiceService?.destroy() } catch (_: Exception) {}
+        // Don't stop background service on destroy — it should persist
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
+        // No longer using action bar menu — we have sidebar instead
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_settings -> {
-                startActivity(Intent(this, SettingsActivity::class.java))
-                true
-            }
-            R.id.action_overlay -> {
-                try {
-                    if (!Settings.canDrawOverlays(this)) {
-                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                        intent.data = android.net.Uri.parse("package:$packageName")
-                        startActivity(intent)
-                        Toast.makeText(this, "Grant overlay permission, then try again", Toast.LENGTH_LONG).show()
-                    } else if (OverlayService.isActive) {
-                        OverlayService.hide(this)
-                    } else {
-                        OverlayService.show(this)
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Overlay error: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
-                true
-            }
-            R.id.action_accessibility -> {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
-        }
+        return super.onOptionsItemSelected(item)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -276,12 +366,44 @@ class ChatActivity : android.app.Activity() {
     }
 
     override fun onBackPressed() {
-        if (isDrawerOpen) {
-            closeTaskDrawer()
-        } else {
-            @Suppress("DEPRECATION")
-            super.onBackPressed()
+        when {
+            isMenuOpen -> closeMenuDrawer()
+            isTaskDrawerOpen -> closeTaskDrawer()
+            else -> {
+                // Move to background instead of finishing
+                moveTaskToBack(true)
+            }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Background Service
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun startBackgroundService() {
+        try {
+            JarvisBackgroundService.start(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start background service", e)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Menu Drawer
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun openMenuDrawer() {
+        isMenuOpen = true
+        menuOverlay.visibility = View.VISIBLE
+        // Refresh overlay status
+        overlayStatusText.text = if (OverlayService.isActive) "ON" else "OFF"
+        maxStepsSlider.progress = Preferences.maxSteps
+        maxStepsValue.text = Preferences.maxSteps.toString()
+    }
+
+    private fun closeMenuDrawer() {
+        isMenuOpen = false
+        menuOverlay.visibility = View.GONE
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -289,26 +411,14 @@ class ChatActivity : android.app.Activity() {
     // ═══════════════════════════════════════════════════════════════
 
     private fun openTaskDrawer() {
-        isDrawerOpen = true
+        isTaskDrawerOpen = true
         taskHistoryOverlay.visibility = View.VISIBLE
         refreshTaskDrawer()
     }
 
     private fun closeTaskDrawer() {
-        isDrawerOpen = false
+        isTaskDrawerOpen = false
         taskHistoryOverlay.visibility = View.GONE
-    }
-
-    private fun refreshTaskBadges() {
-        try {
-            val allTasks = TaskHistoryManager.getAllTasks()
-            val starred = allTasks.count { it.isStarred }
-            val unstarred = allTasks.size - starred
-            taskCountBadge.text = unstarred.toString()
-            starredCountBadge.text = "★ $starred"
-        } catch (e: Exception) {
-            Log.e(TAG, "Error refreshing task badges", e)
-        }
     }
 
     private fun refreshTaskDrawer() {
@@ -324,13 +434,12 @@ class ChatActivity : android.app.Activity() {
                 starredTaskList.adapter = TaskListAdapter(this, starred) { task ->
                     TaskHistoryManager.toggleStar(task.id)
                     refreshTaskDrawer()
-                    refreshTaskBadges()
                 }
-                drawerStarredCount.text = "★ Starred: ${starred.size}"
+                drawerStarredCount.text = "Starred: ${starred.size}"
             } else {
                 starredSectionHeader.visibility = View.GONE
                 starredTaskList.visibility = View.GONE
-                drawerStarredCount.text = "★ Starred: 0"
+                drawerStarredCount.text = "Starred: 0"
             }
 
             // Today section
@@ -341,7 +450,6 @@ class ChatActivity : android.app.Activity() {
                 todayTaskList.adapter = TaskListAdapter(this, today) { task ->
                     TaskHistoryManager.toggleStar(task.id)
                     refreshTaskDrawer()
-                    refreshTaskBadges()
                 }
             } else if (starred.isEmpty()) {
                 todaySectionHeader.visibility = View.GONE
@@ -372,7 +480,10 @@ class ChatActivity : android.app.Activity() {
     private fun processAgentMessage(text: String) {
         isProcessing = true
         progressBar.visibility = View.VISIBLE
-        lastTaskText = text  // Track for task history saving
+        lastTaskText = text
+
+        // Update background notification
+        JarvisBackgroundService.updateStatus(this, "Analyzing: ${text.take(30)}")
 
         scope.launch {
             try {
@@ -380,8 +491,12 @@ class ChatActivity : android.app.Activity() {
                 if (routeAction == null) {
                     addAssistantMessage("I couldn't understand that. Could you rephrase?")
                     lastTaskText = null
+                    JarvisBackgroundService.updateStatus(this@ChatActivity, "Ready")
                     return@launch
                 }
+
+                JarvisBackgroundService.updateStatus(this@ChatActivity, "Executing: ${routeAction.action}")
+
                 if (routeAction.response.isNotBlank()) addAssistantMessage(routeAction.response)
                 val actionHandler = ActionHandler(this@ChatActivity)
                 val result = actionHandler.execute(routeAction)
@@ -392,10 +507,11 @@ class ChatActivity : android.app.Activity() {
                 // Save to task history
                 TaskHistoryManager.saveTask(text, resultMsg)
                 lastTaskText = null
-                refreshTaskBadges()
+                JarvisBackgroundService.updateStatus(this@ChatActivity, "Done: ${resultMsg.take(30)}")
             } catch (e: Exception) {
                 addAssistantMessage("Error: ${e.message}")
                 lastTaskText = null
+                JarvisBackgroundService.updateStatus(this@ChatActivity, "Error: ${e.message?.take(30)}")
             } finally {
                 isProcessing = false
                 progressBar.visibility = View.GONE
@@ -406,6 +522,8 @@ class ChatActivity : android.app.Activity() {
     private fun processChatMessage(text: String) {
         isProcessing = true
         progressBar.visibility = View.VISIBLE
+        JarvisBackgroundService.updateStatus(this, "Chatting...")
+
         scope.launch {
             try {
                 val response = llmClient.sendChatMessage(text, chatHistory)
@@ -417,8 +535,10 @@ class ChatActivity : android.app.Activity() {
                 } else {
                     addAssistantMessage("Could not generate a response. Check your API settings.")
                 }
+                JarvisBackgroundService.updateStatus(this@ChatActivity, "Ready")
             } catch (e: Exception) {
                 addAssistantMessage("Error: ${e.message}")
+                JarvisBackgroundService.updateStatus(this@ChatActivity, "Ready")
             } finally {
                 isProcessing = false
                 progressBar.visibility = View.GONE
@@ -513,7 +633,6 @@ class ChatActivity : android.app.Activity() {
 
     /**
      * ListView adapter for task history items.
-     * Each item shows: star button | task text | result snippet | delete button
      */
     class TaskListAdapter(
         private val context: android.app.Activity,
@@ -535,7 +654,6 @@ class ChatActivity : android.app.Activity() {
                 setBackgroundColor(0xFF1A1A2E.toInt())
             }
 
-            // Star button
             val starBtn = TextView(context).apply {
                 text = if (task.isStarred) "★" else "☆"
                 textSize = 20f
@@ -544,7 +662,6 @@ class ChatActivity : android.app.Activity() {
                 setOnClickListener { onStarToggle(task) }
             }
 
-            // Task text + result
             val textContainer = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(8, 0, 8, 0)
@@ -572,7 +689,6 @@ class ChatActivity : android.app.Activity() {
                 textContainer.addView(resultText)
             }
 
-            // Time label
             val timeText = TextView(context).apply {
                 text = DateUtils.getRelativeTimeSpanString(
                     task.timestamp,
@@ -584,7 +700,6 @@ class ChatActivity : android.app.Activity() {
                 setPadding(4, 0, 4, 0)
             }
 
-            // Delete button
             val deleteBtn = TextView(context).apply {
                 text = "✕"
                 textSize = 16f
@@ -592,10 +707,7 @@ class ChatActivity : android.app.Activity() {
                 setPadding(8, 4, 8, 4)
                 setOnClickListener {
                     TaskHistoryManager.deleteTask(task.id)
-                    (context as? ChatActivity)?.let { activity ->
-                        activity.refreshTaskDrawer()
-                        activity.refreshTaskBadges()
-                    }
+                    (context as? ChatActivity)?.refreshTaskDrawer()
                 }
             }
 
