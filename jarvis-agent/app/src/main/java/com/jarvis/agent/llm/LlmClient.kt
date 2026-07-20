@@ -200,6 +200,50 @@ You are Jarvis, a helpful and friendly AI assistant built into an Android phone.
         callApi(messages)
     }
 
+    /**
+     * Send a vision message with a base64-encoded image to a VLM model.
+     * Uses OpenAI-compatible vision API format.
+     */
+    suspend fun sendVisionMessage(prompt: String, base64Image: String): String? = withContext(Dispatchers.IO) {
+        val vlmModel = Preferences.vlmModel.ifBlank { Preferences.model }
+        val userContent = """[
+            {"type":"text","text":${"\""}$prompt${"\""}},
+            {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,$base64Image"}}
+        ]""".trimIndent()
+
+        // Build raw JSON for vision request
+        val requestJson = """{
+            "model":"$vlmModel",
+            "messages":[
+                {"role":"system","content":"You are a visual assistant that analyzes Android phone screenshots."},
+                {"role":"user","content":$userContent}
+            ],
+            "temperature":${Preferences.temperature.toDouble()},
+            "max_tokens":${Preferences.maxTokens}
+        }""".trimIndent()
+
+        val url = "${Preferences.baseUrl.trimEnd('/')}/chat/completions"
+        val httpRequest = okhttp3.Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${Preferences.apiKey}")
+            .addHeader("Content-Type", "application/json")
+            .post(requestJson.toRequestBody(JSON_MEDIA))
+            .build()
+
+        try {
+            val response = client.newCall(httpRequest).execute()
+            val responseBody = response.body?.string()
+            if (!response.isSuccessful || responseBody.isNullOrBlank()) return@withContext null
+            val chatResponse = chatResponseAdapter.fromJson(responseBody)
+            val content = chatResponse?.choices?.firstOrNull()?.message?.content
+            if (content.isNullOrBlank()) return@withContext null
+            stripThinkBlocks(content)
+        } catch (e: Exception) {
+            Log.e(TAG, "Vision API call failed", e)
+            null
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════
     // CORE API CALL (with retry)
     // ═══════════════════════════════════════════════════════════

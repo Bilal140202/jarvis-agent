@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout
+<LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
     android:background="#0F0F1A">
 
     <!-- Status Bar -->
@@ -51,20 +51,22 @@
     </LinearLayout>
 
     <!-- Chat Messages -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recyclerView"
+    <ListView
+        android:id="@+id/messageList"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginTop="44dp"
-        android:layout_marginBottom="60dp"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:clipToPadding="false"
-        android:padding="8dp" />
+        android:padding="8dp"
+        android:divider="@null"
+        android:dividerHeight="4dp"
+        android:stackFromBottom="true"
+        android:transcriptMode="alwaysScroll" />
 
     <!-- Input Bar -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
         android:orientation="horizontal"
         android:padding="8dp"
         android:gravity="center_vertical"
@@ -75,9 +77,8 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:src="@android:drawable/ic_btn_speak_now"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Voice input"
-            android:tint="#6C63FF" />
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Voice input" />
 
         <EditText
             android:id="@+id/messageInput"
@@ -100,9 +101,8 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:src="@android:drawable/ic_menu_send"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Send"
-            android:tint="#6C63FF" />
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Send" />
     </LinearLayout>
 
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+</LinearLayout>

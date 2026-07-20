@@ -184,7 +184,15 @@ class TaskExecutor(
                 continue
             }
 
-            // 6. Execute the action
+            // 6. Safety gate: check for destructive actions
+            if (Preferences.confirmDestructive && isDestructiveAction(atomicAction)) {
+                Log.w(TAG, "Blocking destructive action: ${atomicAction.action}")
+                previousResult = "BLOCKED: This action looks potentially destructive (payment, delete, uninstall). " +
+                    "Disable 'Confirm Destructive Actions' in Settings to allow. Skipping this step."
+                continue
+            }
+
+            // 7. Execute the action
             val success = executeAtomicAction(atomicAction, service)
 
             if (success) {
@@ -339,5 +347,54 @@ class TaskExecutor(
     suspend fun cancel() {
         cancelMutex.withLock { cancelled = true }
         Log.i(TAG, "Task cancellation requested")
+    }
+
+    /**
+     * Detect potentially destructive actions based on text content.
+     * Blocks: payments, deletions, uninstalls, data clearing, etc.
+     */
+    private fun isDestructiveAction(action: AtomicAction): Boolean {
+        val text = (action.param("text") ?: "").lowercase()
+        val destructivePatterns = listOf(
+            "pay", "purchase", "buy", "checkout", "order",
+            "delete", "remove", "uninstall", "clear data", "erase",
+            "format", "factory reset", "reset", "wipe",
+            "confirm payment", "place order", "subscribe"
+        )
+        return destructivePatterns.any { text.contains(it) }
+    }
+
+    /**
+     * Shizuku fallback for actions that fail via AccessibilityService.
+     */
+    private val shizukuService = com.jarvis.agent.service.ShizukuService()
+
+    private suspend fun tryShizukuFallback(action: String, params: Map<String, Any>): Boolean {
+        if (!Preferences.shizukuEnabled || !shizukuService.isAvailable()) return false
+        return when (action) {
+            Constants.ACTION_PRESS_ENTER -> shizukuService.pressKey(66) // KEYCODE_ENTER
+            Constants.ACTION_SCROLL -> {
+                val metrics = context.resources.displayMetrics
+                val w = metrics.widthPixels
+                val h = metrics.heightPixels
+                val dir = params["direction"]?.toString() ?: "down"
+                if (dir == "down") {
+                    shizukuService.inputSwipe(w / 2, (h * 0.7).toInt(), w / 2, (h * 0.3).toInt())
+                } else {
+                    shizukuService.inputSwipe(w / 2, (h * 0.3).toInt(), w / 2, (h * 0.7).toInt())
+                }
+            }
+            Constants.ACTION_SWIPE -> {
+                val metrics = context.resources.displayMetrics
+                val w = metrics.widthPixels
+                val h = metrics.heightPixels
+                val sx = ((params["start_x"]?.toString()?.toIntOrNull() ?: 50) * w / 100)
+                val sy = ((params["start_y"]?.toString()?.toIntOrNull() ?: 70) * h / 100)
+                val ex = ((params["end_x"]?.toString()?.toIntOrNull() ?: 50) * w / 100)
+                val ey = ((params["end_y"]?.toString()?.toIntOrNull() ?: 30) * h / 100)
+                shizukuService.inputSwipe(sx, sy, ex, ey)
+            }
+            else -> false
+        }
     }
 }

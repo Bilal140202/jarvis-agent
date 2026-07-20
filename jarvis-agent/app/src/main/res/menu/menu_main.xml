@@ -1,20 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<menu xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto">
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
 
     <item
         android:id="@+id/action_settings"
         android:title="Settings"
         android:icon="@android:drawable/ic_menu_preferences"
-        app:showAsAction="ifRoom" />
+        android:showAsAction="ifRoom" />
 
     <item
         android:id="@+id/action_overlay"
         android:title="Show Overlay"
-        app:showAsAction="never" />
+        android:showAsAction="never" />
 
     <item
         android:id="@+id/action_accessibility"
         android:title="Accessibility Settings"
-        app:showAsAction="never" />
+        android:showAsAction="never" />
 </menu>

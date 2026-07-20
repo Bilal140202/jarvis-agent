@@ -1,0 +1,11 @@
+#!/bin/sh
+APP_BASE_NAME=`basename "$0"`
+APP_HOME=`pwd`
+CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+# If no wrapper jar, download it
+if [ ! -f "$CLASSPATH" ]; then
+    echo "Gradle wrapper not found, using installed gradle..."
+fi
+export ANDROID_HOME=/home/z/android-sdk
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+exec $JAVA_HOME/bin/java -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

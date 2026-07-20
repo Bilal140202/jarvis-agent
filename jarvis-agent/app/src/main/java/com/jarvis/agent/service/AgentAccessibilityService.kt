@@ -50,7 +50,7 @@ class AgentAccessibilityService : AccessibilityService() {
             flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                     AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                     AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                    AccessibilityServiceInfo.FLAG_DEFAULT
+                    0 // FLAG_DEFAULT not available in all API levels
             notificationTimeout = 100
         }
         serviceInfo = info
@@ -225,10 +225,10 @@ class AgentAccessibilityService : AccessibilityService() {
     fun tap(x: Float, y: Float): Boolean {
         return try {
             val path = Path().apply { moveTo(x, y) }
-            val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0L, 100L))
-                .build()
-            dispatchGesture(gesture, null, null)
+            val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0L, 100L)
+            val builder = android.accessibilityservice.GestureDescription.Builder()
+            builder.addStroke(stroke)
+            dispatchGesture(builder.build(), null, null)
             Log.d(TAG, "Tapped at ($x, $y)")
             true
         } catch (e: Exception) {
@@ -279,10 +279,10 @@ class AgentAccessibilityService : AccessibilityService() {
                 moveTo(startX, startY)
                 lineTo(endX, endY)
             }
-            val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0L, duration))
-                .build()
-            dispatchGesture(gesture, null, null)
+            val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0L, duration)
+            val builder = android.accessibilityservice.GestureDescription.Builder()
+            builder.addStroke(stroke)
+            dispatchGesture(builder.build(), null, null)
             Log.d(TAG, "Swiped from ($startX,$startY) to ($endX,$endY)")
             true
         } catch (e: Exception) {
@@ -359,7 +359,7 @@ class AgentAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             if (focused != null) {
-                val result = focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER)
+                val result = focused.performAction(0x10000000) // ACTION_IME_ENTER (API 30+)
                 if (result) {
                     Log.d(TAG, "Pressed Enter via ACTION_IME_ENTER")
                     return true

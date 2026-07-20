@@ -11,12 +11,180 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- API Section -->
+        <!-- ═══ OpenRouter API ═══ -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="AI Provider"
+            android:text="OpenRouter API"
             android:textColor="#6C63FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputOpenrouterKey"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="OpenRouter API Key"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#6C63FF"
+            android:inputType="textPassword"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputOpenrouterModel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Model (e.g., openai/gpt-4o)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#6C63FF"
+            android:inputType="text"
+            android:layout_marginBottom="4dp" />
+
+        <Button
+            android:id="@+id/btnApplyOpenrouter"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:text="Use OpenRouter"
+            android:backgroundTint="#2A2A4E"
+            android:textColor="#6C63FF"
+            android:textSize="12sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- ═══ NVIDIA NIM API ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="NVIDIA NIM API"
+            android:textColor="#76B900"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputNimKey"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="NVIDIA NIM API Key (nvapi-...)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#76B900"
+            android:inputType="textPassword"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputNimModel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Model (e.g., meta/llama-3.1-8b-instruct)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#76B900"
+            android:inputType="text"
+            android:layout_marginBottom="4dp" />
+
+        <Button
+            android:id="@+id/btnApplyNim"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:text="Use NVIDIA NIM"
+            android:backgroundTint="#2A2A4E"
+            android:textColor="#76B900"
+            android:textSize="12sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- ═══ DeepSeek API ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="DeepSeek API"
+            android:textColor="#4FC3F7"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputDeepseekKey"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="DeepSeek API Key"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#4FC3F7"
+            android:inputType="textPassword"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputDeepseekModel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Model (e.g., deepseek-chat)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#4FC3F7"
+            android:inputType="text"
+            android:layout_marginBottom="4dp" />
+
+        <Button
+            android:id="@+id/btnApplyDeepseek"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:text="Use DeepSeek"
+            android:backgroundTint="#2A2A4E"
+            android:textColor="#4FC3F7"
+            android:textSize="12sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- ═══ OpenAI API ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OpenAI API"
+            android:textColor="#10A37F"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputOpenaiKey"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="OpenAI API Key (sk-...)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#10A37F"
+            android:inputType="textPassword"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputOpenaiModel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Model (e.g., gpt-4o)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#10A37F"
+            android:inputType="text"
+            android:layout_marginBottom="4dp" />
+
+        <Button
+            android:id="@+id/btnApplyOpenai"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:text="Use OpenAI"
+            android:backgroundTint="#2A2A4E"
+            android:textColor="#10A37F"
+            android:textSize="12sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- ═══ Custom API (advanced) ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Custom API (Advanced)"
+            android:textColor="#FF6B6B"
             android:textSize="18sp"
             android:textStyle="bold"
             android:layout_marginBottom="8dp" />
@@ -28,7 +196,7 @@
             android:hint="API Key"
             android:textColorHint="#808080"
             android:textColor="#E0E0E0"
-            android:backgroundTint="#6C63FF"
+            android:backgroundTint="#FF6B6B"
             android:inputType="textPassword"
             android:layout_marginBottom="8dp" />
 
@@ -39,7 +207,7 @@
             android:hint="Base URL"
             android:textColorHint="#808080"
             android:textColor="#E0E0E0"
-            android:backgroundTint="#6C63FF"
+            android:backgroundTint="#FF6B6B"
             android:inputType="textUri"
             android:layout_marginBottom="8dp" />
 
@@ -57,7 +225,7 @@
                 android:hint="Model"
                 android:textColorHint="#808080"
                 android:textColor="#E0E0E0"
-                android:backgroundTint="#6C63FF"
+                android:backgroundTint="#FF6B6B"
                 android:inputType="text" />
 
             <Button
@@ -70,7 +238,7 @@
                 android:layout_marginStart="8dp" />
         </LinearLayout>
 
-        <!-- Agent Settings -->
+        <!-- ═══ Agent Behavior ═══ -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -120,7 +288,7 @@
             android:progress="2048"
             android:layout_marginBottom="16dp" />
 
-        <!-- Toggles -->
+        <!-- ═══ Features ═══ -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -140,7 +308,7 @@
         <Switch android:id="@+id/switchSkillMemory"
             android:layout_width="match_parent"
             android:layout_height="48dp"
-            android:text="Skill Memory (Learn & Replay)"
+            android:text="Skill Memory (Learn &amp; Replay)"
             android:textColor="#E0E0E0"
             android:layout_marginBottom="4dp" />
 
@@ -148,7 +316,7 @@
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:text="Confirm Destructive Actions"
-            android:textColor="#E0E0E0"
+            android:textColor="#FF6B6B"
             android:layout_marginBottom="4dp" />
 
         <Switch android:id="@+id/switchOverlay"
@@ -163,14 +331,70 @@
             android:layout_height="48dp"
             android:text="Voice Responses"
             android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+
+        <!-- ═══ VLM (Vision) ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Vision (VLM)"
+            android:textColor="#E040FB"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp" />
+
+        <Switch android:id="@+id/switchVlm"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Enable Screenshot + VLM Analysis"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputVlmModel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="VLM Model (e.g., openai/gpt-4o)"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#E040FB"
+            android:inputType="text"
             android:layout_marginBottom="16dp" />
 
-        <!-- Telegram -->
+        <!-- ═══ Shizuku ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Shizuku (Elevated Commands)"
+            android:textColor="#FF9800"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp" />
+
+        <Switch android:id="@+id/switchShizuku"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Enable Shizuku (ADB commands)"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/labelShizukuStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Status: Not checked"
+            android:textColor="#808080"
+            android:textSize="12sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- ═══ Telegram ═══ -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Telegram Bot (Remote Control)"
-            android:textColor="#6C63FF"
+            android:textColor="#26A5E4"
             android:textSize="18sp"
             android:textStyle="bold"
             android:layout_marginBottom="8dp" />
@@ -189,11 +413,11 @@
             android:hint="Bot Token"
             android:textColorHint="#808080"
             android:textColor="#E0E0E0"
-            android:backgroundTint="#6C63FF"
+            android:backgroundTint="#26A5E4"
             android:inputType="text"
             android:layout_marginBottom="16dp" />
 
-        <!-- Accessibility Status -->
+        <!-- ═══ Accessibility ═══ -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -206,8 +430,8 @@
         <TextView android:id="@+id/labelA11yStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="✗ Not Active"
-            android:textColor="#FF6B6B"
+            android:text="Status: Unknown"
+            android:textColor="#808080"
             android:layout_marginBottom="8dp" />
 
         <Button
@@ -219,7 +443,7 @@
             android:textColor="#E0E0E0"
             android:layout_marginBottom="24dp" />
 
-        <!-- Save -->
+        <!-- ═══ Save ═══ -->
         <Button
             android:id="@+id/btnSave"
             android:layout_width="match_parent"
