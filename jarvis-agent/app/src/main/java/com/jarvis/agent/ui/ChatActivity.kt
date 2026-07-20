@@ -109,10 +109,17 @@ class ChatActivity : android.app.Activity() {
         voiceService.initTts()
         addAssistantMessage("Hello! I'm Jarvis, your Android assistant. How can I help you today?")
 
-        registerReceiver(taskReceiver, IntentFilter().apply {
-            addAction(Constants.ACTION_TASK_COMPLETE)
-            addAction(Constants.ACTION_TASK_UPDATE)
-        })
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(taskReceiver, IntentFilter().apply {
+                addAction(Constants.ACTION_TASK_COMPLETE)
+                addAction(Constants.ACTION_TASK_UPDATE)
+            }, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(taskReceiver, IntentFilter().apply {
+                addAction(Constants.ACTION_TASK_COMPLETE)
+                addAction(Constants.ACTION_TASK_UPDATE)
+            })
+        }
 
         if (Preferences.overlayEnabled) {
             OverlayService.show(this)

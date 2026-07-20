@@ -29,7 +29,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.JarvisAgent"
         android:usesCleartextTraffic="true"
-        tools:targetApi="34">
+        tools:targetApi="35">
 
         <!-- Main Chat Activity -->
         <activity

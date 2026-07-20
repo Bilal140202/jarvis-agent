@@ -30,8 +30,10 @@ class SettingsActivity : Activity() {
         setupListeners()
     }
 
+    @Deprecated("Deprecated in API 33")
     override fun onBackPressed() {
-        finish()
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 
     private fun loadSettings() {

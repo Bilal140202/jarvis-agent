@@ -1,2 +1,9 @@
+android-sdk/
+jdk/
+private-agent/
+tool-results/
 skills/
-node_modules/
+upload/
+.env
+worklog.md
+download/
