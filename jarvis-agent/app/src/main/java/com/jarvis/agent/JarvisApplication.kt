@@ -7,12 +7,15 @@ import android.content.Context
 import android.util.Log
 import com.jarvis.agent.util.Constants
 import com.jarvis.agent.util.Preferences
+import com.jarvis.agent.util.TaskHistoryManager
 
 class JarvisApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         try {
             Preferences.init(this)
+            TaskHistoryManager.init(this)
+            TaskHistoryManager.cleanupExpired()
             createNotificationChannels()
         } catch (e: Exception) {
             Log.e("JarvisApp", "Failed to initialize", e)

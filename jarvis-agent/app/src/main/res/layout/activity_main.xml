@@ -1,108 +1,295 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
+<FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#0F0F1A">
+    android:background="#0F0F1A"
+    android:fitsSystemWindows="true">
 
-    <!-- Status Bar -->
-    <LinearLayout
-        android:id="@+id/statusBar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="8dp"
-        android:gravity="center_vertical"
-        android:background="#1A1A2E">
-
-        <View
-            android:id="@+id/statusIndicator"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:background="@android:drawable/presence_offline" />
-
-        <TextView
-            android:id="@+id/statusText"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:text="Not Connected"
-            android:textColor="#808080"
-            android:textSize="12sp" />
-
-        <ToggleButton
-            android:id="@+id/modeToggle"
-            android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:textOn="Chat"
-            android:textOff="Agent"
-            android:textSize="11sp"
-            android:backgroundTint="#6C63FF"
-            android:textColor="#FFFFFF" />
-
-        <ProgressBar
-            android:id="@+id/progressBar"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:layout_marginStart="8dp"
-            android:visibility="gone" />
-    </LinearLayout>
-
-    <!-- Chat Messages -->
-    <ListView
-        android:id="@+id/messageList"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:padding="8dp"
-        android:divider="@null"
-        android:dividerHeight="4dp"
-        android:stackFromBottom="true"
-        android:transcriptMode="alwaysScroll" />
-
-    <!-- Input Bar -->
+    <!-- Main content -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="8dp"
-        android:gravity="center_vertical"
-        android:background="#1A1A2E">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <ImageButton
-            android:id="@+id/voiceButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:src="@android:drawable/ic_btn_speak_now"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Voice input" />
-
-        <EditText
-            android:id="@+id/messageInput"
-            android:layout_width="0dp"
+        <!-- Status Bar -->
+        <LinearLayout
+            android:id="@+id/statusBar"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:layout_marginEnd="8dp"
-            android:background="@android:color/transparent"
-            android:hint="Ask Jarvis anything..."
-            android:textColorHint="#808080"
-            android:textColor="#E0E0E0"
-            android:minHeight="44dp"
-            android:maxLines="4"
-            android:inputType="textMultiLine"
-            android:imeOptions="actionSend" />
+            android:orientation="horizontal"
+            android:padding="8dp"
+            android:gravity="center_vertical"
+            android:background="#1A1A2E">
 
-        <ImageButton
-            android:id="@+id/sendButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:src="@android:drawable/ic_menu_send"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Send" />
+            <View
+                android:id="@+id/statusIndicator"
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@android:drawable/presence_offline" />
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:text="Not Connected"
+                android:textColor="#808080"
+                android:textSize="12sp" />
+
+            <ToggleButton
+                android:id="@+id/modeToggle"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:textOn="Chat"
+                android:textOff="Agent"
+                android:textSize="11sp"
+                android:backgroundTint="#6C63FF"
+                android:textColor="#FFFFFF" />
+
+            <ProgressBar
+                android:id="@+id/progressBar"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="8dp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Chat Messages -->
+        <ListView
+            android:id="@+id/messageList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:padding="8dp"
+            android:divider="@null"
+            android:dividerHeight="4dp"
+            android:stackFromBottom="true"
+            android:transcriptMode="alwaysScroll" />
+
+        <!-- Task History Toggle Button -->
+        <LinearLayout
+            android:id="@+id/taskHistoryBar"
+            android:layout_width="match_parent"
+            android:layout_height="36dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:background="#12122A"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Task History"
+                android:textColor="#808080"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/taskCountBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0"
+                android:textColor="#6C63FF"
+                android:textSize="11sp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:background="#1A1A2E"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:id="@+id/starredCountBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="★ 0"
+                android:textColor="#FFD700"
+                android:textSize="11sp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:background="#1A1A2E"
+                android:layout_marginEnd="4dp" />
+
+            <View
+                android:layout_width="12dp"
+                android:layout_height="12dp"
+                android:background="@android:drawable/arrow_up_float" />
+        </LinearLayout>
+
+        <!-- Input Bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="8dp"
+            android:gravity="center_vertical"
+            android:background="#1A1A2E">
+
+            <ImageButton
+                android:id="@+id/voiceButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@android:drawable/ic_btn_speak_now"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Voice input" />
+
+            <EditText
+                android:id="@+id/messageInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:background="@android:color/transparent"
+                android:hint="Ask Jarvis anything..."
+                android:textColorHint="#808080"
+                android:textColor="#E0E0E0"
+                android:minHeight="44dp"
+                android:maxLines="4"
+                android:inputType="textMultiLine"
+                android:imeOptions="actionSend" />
+
+            <ImageButton
+                android:id="@+id/sendButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@android:drawable/ic_menu_send"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Send" />
+        </LinearLayout>
     </LinearLayout>
 
-</LinearLayout>
+    <!-- Task History Drawer (slides up from bottom) -->
+    <FrameLayout
+        android:id="@+id/taskHistoryOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#AA000000"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:id="@+id/taskHistoryDrawer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="bottom"
+            android:orientation="vertical"
+            android:background="#0F0F1A"
+            android:paddingTop="16dp">
+
+            <!-- Drawer Header -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="12dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Task History"
+                    android:textColor="#E0E0E0"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/drawerStarredCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="★ Starred: 0"
+                    android:textColor="#FFD700"
+                    android:textSize="13sp"
+                    android:layout_marginEnd="12dp" />
+
+                <ImageButton
+                    android:id="@+id/closeDrawerButton"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:src="@android:drawable/ic_menu_close_clear_cancel"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Close"
+                    android:scaleType="centerInside" />
+            </LinearLayout>
+
+            <!-- Section: Starred Tasks -->
+            <TextView
+                android:id="@+id/starredSectionHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="4dp"
+                android:text="★ Saved Forever"
+                android:textColor="#FFD700"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <ListView
+                android:id="@+id/starredTaskList"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:divider="@null"
+                android:dividerHeight="2dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:visibility="gone" />
+
+            <!-- Section: Today's Tasks -->
+            <TextView
+                android:id="@+id/todaySectionHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="4dp"
+                android:text="Today's Tasks"
+                android:textColor="#6C63FF"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <ListView
+                android:id="@+id/todayTaskList"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:divider="@null"
+                android:dividerHeight="2dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
+
+            <!-- Empty state -->
+            <TextView
+                android:id="@+id/emptyTaskMessage"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="No tasks yet.\nYour tasks will appear here."
+                android:textColor="#606060"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <!-- Footer hint -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:padding="12dp"
+                android:text="Star a task to save it forever • Unstarred tasks expire in 24h or after 5 tasks"
+                android:textColor="#505050"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

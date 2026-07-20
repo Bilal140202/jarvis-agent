@@ -176,7 +176,7 @@ class AgentLoopService : Service() {
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelIntent)
+            .addAction(android.R.drawable.ic_media_pause, "Stop", cancelIntent)
             .setOngoing(true)
             .build()
     }

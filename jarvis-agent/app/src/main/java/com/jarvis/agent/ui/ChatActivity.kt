@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.SpeechRecognizer
+import android.text.format.DateUtils
 import android.util.Log
 import android.view.Gravity
 import android.view.Menu
@@ -20,10 +21,13 @@ import com.jarvis.agent.agent.ActionHandler
 import com.jarvis.agent.llm.ChatMessage
 import com.jarvis.agent.llm.LlmClient
 import com.jarvis.agent.service.AgentAccessibilityService
+import com.jarvis.agent.service.AgentLoopService
 import com.jarvis.agent.service.OverlayService
 import com.jarvis.agent.service.VoiceService
 import com.jarvis.agent.util.Constants
 import com.jarvis.agent.util.Preferences
+import com.jarvis.agent.util.TaskHistoryManager
+import com.jarvis.agent.util.TaskHistoryManager.TaskRecord
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -40,6 +44,7 @@ class ChatActivity : android.app.Activity() {
         private const val REQUEST_NOTIFICATIONS = 1003
     }
 
+    // Chat UI
     private lateinit var messageList: ListView
     private lateinit var messageInput: EditText
     private lateinit var sendButton: ImageButton
@@ -49,6 +54,20 @@ class ChatActivity : android.app.Activity() {
     private lateinit var modeToggle: ToggleButton
     private lateinit var progressBar: ProgressBar
 
+    // Task History UI
+    private lateinit var taskHistoryBar: LinearLayout
+    private lateinit var taskCountBadge: TextView
+    private lateinit var starredCountBadge: TextView
+    private lateinit var taskHistoryOverlay: FrameLayout
+    private lateinit var taskHistoryDrawer: LinearLayout
+    private lateinit var closeDrawerButton: ImageButton
+    private lateinit var starredTaskList: ListView
+    private lateinit var todayTaskList: ListView
+    private lateinit var starredSectionHeader: TextView
+    private lateinit var todaySectionHeader: TextView
+    private lateinit var emptyTaskMessage: TextView
+    private lateinit var drawerStarredCount: TextView
+
     private val messages = mutableListOf<ChatMessage>()
     private lateinit var chatAdapter: MessageListAdapter
     private val llmClient = LlmClient()
@@ -57,6 +76,10 @@ class ChatActivity : android.app.Activity() {
     private var isAgentMode = true
     private var isProcessing = false
     private val chatHistory = mutableListOf<ChatMessage>()
+    private var isDrawerOpen = false
+
+    // Track last task for saving to history
+    private var lastTaskText: String? = null
 
     private val taskReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -69,6 +92,14 @@ class ChatActivity : android.app.Activity() {
                         addAssistantMessage("${if (status == "success") "OK" else "X"} $msg")
                         isProcessing = false
                         progressBar.visibility = View.GONE
+
+                        // Save task to history
+                        val taskText = lastTaskText
+                        if (taskText != null) {
+                            TaskHistoryManager.saveTask(taskText, msg)
+                            lastTaskText = null
+                            refreshTaskBadges()
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -90,6 +121,7 @@ class ChatActivity : android.app.Activity() {
 
             setContentView(R.layout.activity_main)
 
+            // Chat UI bindings
             messageList = findViewById(R.id.messageList)
             messageInput = findViewById(R.id.messageInput)
             sendButton = findViewById(R.id.sendButton)
@@ -99,9 +131,24 @@ class ChatActivity : android.app.Activity() {
             modeToggle = findViewById(R.id.modeToggle)
             progressBar = findViewById(R.id.progressBar)
 
+            // Task History UI bindings
+            taskHistoryBar = findViewById(R.id.taskHistoryBar)
+            taskCountBadge = findViewById(R.id.taskCountBadge)
+            starredCountBadge = findViewById(R.id.starredCountBadge)
+            taskHistoryOverlay = findViewById(R.id.taskHistoryOverlay)
+            taskHistoryDrawer = findViewById(R.id.taskHistoryDrawer)
+            closeDrawerButton = findViewById(R.id.closeDrawerButton)
+            starredTaskList = findViewById(R.id.starredTaskList)
+            todayTaskList = findViewById(R.id.todayTaskList)
+            starredSectionHeader = findViewById(R.id.starredSectionHeader)
+            todaySectionHeader = findViewById(R.id.todaySectionHeader)
+            emptyTaskMessage = findViewById(R.id.emptyTaskMessage)
+            drawerStarredCount = findViewById(R.id.drawerStarredCount)
+
             chatAdapter = MessageListAdapter(this, messages)
             messageList.adapter = chatAdapter
 
+            // Mode toggle
             modeToggle.setOnCheckedChangeListener { _, isChecked ->
                 isAgentMode = !isChecked
                 Toast.makeText(this, "Mode: ${if (isAgentMode) "Agent" else "Chat"}", Toast.LENGTH_SHORT).show()
@@ -115,6 +162,12 @@ class ChatActivity : android.app.Activity() {
                 }
             }
 
+            // Task History drawer logic
+            taskHistoryBar.setOnClickListener { openTaskDrawer() }
+            closeDrawerButton.setOnClickListener { closeTaskDrawer() }
+            taskHistoryOverlay.setOnClickListener { closeTaskDrawer() }
+            taskHistoryDrawer.setOnClickListener { /* consume clicks to prevent closing */ }
+
             // Initialize voice safely
             try {
                 voiceService = VoiceService(this)
@@ -124,6 +177,10 @@ class ChatActivity : android.app.Activity() {
             }
 
             addAssistantMessage("Hello! I'm Jarvis, your Android assistant. How can I help you today?")
+
+            // Cleanup expired tasks on start
+            TaskHistoryManager.cleanupExpired()
+            refreshTaskBadges()
 
             // Register broadcast receiver safely
             try {
@@ -151,9 +208,6 @@ class ChatActivity : android.app.Activity() {
                     )
                 }
             }
-
-            // Don't auto-start overlay — let user enable it manually
-            // Overlay requires SYSTEM_ALERT_WINDOW permission which must be granted in Settings
         } catch (e: Exception) {
             Log.e(TAG, "Fatal error in onCreate", e)
             Toast.makeText(this, "Error starting Jarvis: ${e.message}", Toast.LENGTH_LONG).show()
@@ -164,6 +218,8 @@ class ChatActivity : android.app.Activity() {
         super.onResume()
         try {
             updateServiceStatus()
+            TaskHistoryManager.cleanupExpired()
+            refreshTaskBadges()
         } catch (e: Exception) {
             Log.e(TAG, "Error in onResume", e)
         }
@@ -219,6 +275,92 @@ class ChatActivity : android.app.Activity() {
         }
     }
 
+    override fun onBackPressed() {
+        if (isDrawerOpen) {
+            closeTaskDrawer()
+        } else {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Task History Drawer
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun openTaskDrawer() {
+        isDrawerOpen = true
+        taskHistoryOverlay.visibility = View.VISIBLE
+        refreshTaskDrawer()
+    }
+
+    private fun closeTaskDrawer() {
+        isDrawerOpen = false
+        taskHistoryOverlay.visibility = View.GONE
+    }
+
+    private fun refreshTaskBadges() {
+        try {
+            val allTasks = TaskHistoryManager.getAllTasks()
+            val starred = allTasks.count { it.isStarred }
+            val unstarred = allTasks.size - starred
+            taskCountBadge.text = unstarred.toString()
+            starredCountBadge.text = "★ $starred"
+        } catch (e: Exception) {
+            Log.e(TAG, "Error refreshing task badges", e)
+        }
+    }
+
+    private fun refreshTaskDrawer() {
+        try {
+            val allTasks = TaskHistoryManager.getAllTasks()
+            val starred = allTasks.filter { it.isStarred }
+            val today = TaskHistoryManager.getTodayTasks().filter { !it.isStarred }
+
+            // Starred section
+            if (starred.isNotEmpty()) {
+                starredSectionHeader.visibility = View.VISIBLE
+                starredTaskList.visibility = View.VISIBLE
+                starredTaskList.adapter = TaskListAdapter(this, starred) { task ->
+                    TaskHistoryManager.toggleStar(task.id)
+                    refreshTaskDrawer()
+                    refreshTaskBadges()
+                }
+                drawerStarredCount.text = "★ Starred: ${starred.size}"
+            } else {
+                starredSectionHeader.visibility = View.GONE
+                starredTaskList.visibility = View.GONE
+                drawerStarredCount.text = "★ Starred: 0"
+            }
+
+            // Today section
+            if (today.isNotEmpty()) {
+                todaySectionHeader.visibility = View.VISIBLE
+                todayTaskList.visibility = View.VISIBLE
+                emptyTaskMessage.visibility = View.GONE
+                todayTaskList.adapter = TaskListAdapter(this, today) { task ->
+                    TaskHistoryManager.toggleStar(task.id)
+                    refreshTaskDrawer()
+                    refreshTaskBadges()
+                }
+            } else if (starred.isEmpty()) {
+                todaySectionHeader.visibility = View.GONE
+                todayTaskList.visibility = View.GONE
+                emptyTaskMessage.visibility = View.VISIBLE
+            } else {
+                todaySectionHeader.visibility = View.GONE
+                todayTaskList.visibility = View.GONE
+                emptyTaskMessage.visibility = View.GONE
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error refreshing task drawer", e)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Message Handling
+    // ═══════════════════════════════════════════════════════════════
+
     private fun sendMessage() {
         val text = messageInput.text.toString().trim()
         if (text.isBlank() || isProcessing) return
@@ -230,11 +372,14 @@ class ChatActivity : android.app.Activity() {
     private fun processAgentMessage(text: String) {
         isProcessing = true
         progressBar.visibility = View.VISIBLE
+        lastTaskText = text  // Track for task history saving
+
         scope.launch {
             try {
                 val routeAction = llmClient.sendRouteMessage(text)
                 if (routeAction == null) {
                     addAssistantMessage("I couldn't understand that. Could you rephrase?")
+                    lastTaskText = null
                     return@launch
                 }
                 if (routeAction.response.isNotBlank()) addAssistantMessage(routeAction.response)
@@ -243,8 +388,14 @@ class ChatActivity : android.app.Activity() {
                 val resultMsg = result.details ?: if (result.success) "Done!" else "Something went wrong."
                 addAssistantMessage(resultMsg)
                 if (Preferences.voiceEnabled && result.success) voiceService?.speak(resultMsg)
+
+                // Save to task history
+                TaskHistoryManager.saveTask(text, resultMsg)
+                lastTaskText = null
+                refreshTaskBadges()
             } catch (e: Exception) {
                 addAssistantMessage("Error: ${e.message}")
+                lastTaskText = null
             } finally {
                 isProcessing = false
                 progressBar.visibility = View.GONE
@@ -314,6 +465,10 @@ class ChatActivity : android.app.Activity() {
         statusText.text = if (running) "Connected" else "Not Connected"
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Adapters
+    // ═══════════════════════════════════════════════════════════════
+
     /**
      * Simple ListView adapter for chat messages.
      */
@@ -351,6 +506,103 @@ class ChatActivity : android.app.Activity() {
                 gravity = if (isUser) Gravity.END else Gravity.START
                 addView(tv)
             }
+
+            return container
+        }
+    }
+
+    /**
+     * ListView adapter for task history items.
+     * Each item shows: star button | task text | result snippet | delete button
+     */
+    class TaskListAdapter(
+        private val context: android.app.Activity,
+        private val tasks: List<TaskRecord>,
+        private val onStarToggle: (TaskRecord) -> Unit
+    ) : BaseAdapter() {
+
+        override fun getCount() = tasks.size
+        override fun getItem(position: Int) = tasks[position]
+        override fun getItemId(position: Int) = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val task = tasks[position]
+
+            val container = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(8, 10, 8, 10)
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundColor(0xFF1A1A2E.toInt())
+            }
+
+            // Star button
+            val starBtn = TextView(context).apply {
+                text = if (task.isStarred) "★" else "☆"
+                textSize = 20f
+                setTextColor(if (task.isStarred) 0xFFFFD700.toInt() else 0xFF606060.toInt())
+                setPadding(8, 4, 8, 4)
+                setOnClickListener { onStarToggle(task) }
+            }
+
+            // Task text + result
+            val textContainer = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(8, 0, 8, 0)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val taskText = TextView(context).apply {
+                text = task.text
+                textSize = 14f
+                setTextColor(0xFFE0E0E0.toInt())
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+
+            val resultText = TextView(context).apply {
+                text = task.result.takeIf { it.isNotBlank() } ?: ""
+                textSize = 12f
+                setTextColor(0xFF808080.toInt())
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+
+            textContainer.addView(taskText)
+            if (resultText.text.isNotBlank()) {
+                textContainer.addView(resultText)
+            }
+
+            // Time label
+            val timeText = TextView(context).apply {
+                text = DateUtils.getRelativeTimeSpanString(
+                    task.timestamp,
+                    System.currentTimeMillis(),
+                    DateUtils.MINUTE_IN_MILLIS
+                )
+                textSize = 10f
+                setTextColor(0xFF505050.toInt())
+                setPadding(4, 0, 4, 0)
+            }
+
+            // Delete button
+            val deleteBtn = TextView(context).apply {
+                text = "✕"
+                textSize = 16f
+                setTextColor(0xFFFF6B6B.toInt())
+                setPadding(8, 4, 8, 4)
+                setOnClickListener {
+                    TaskHistoryManager.deleteTask(task.id)
+                    (context as? ChatActivity)?.let { activity ->
+                        activity.refreshTaskDrawer()
+                        activity.refreshTaskBadges()
+                    }
+                }
+            }
+
+            container.addView(starBtn)
+            container.addView(textContainer)
+            container.addView(timeText)
+            container.addView(deleteBtn)
 
             return container
         }
