@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Step 0: Permissions -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:gravity="center_horizontal">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Grant Permissions"
+        android:textColor="#FFFFFF"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Jarvis needs these permissions to control your phone"
+        android:textColor="#808080"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Permission items -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:text="Microphone (Voice Input)" android:textColor="#E0E0E0" />
+        <TextView android:id="@+id/statusMic" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:text="✗" android:textColor="#FF6B6B" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:text="Contacts (Call & SMS)" android:textColor="#E0E0E0" />
+        <TextView android:id="@+id/statusContacts" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:text="✗" android:textColor="#FF6B6B" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:text="Phone (Make Calls)" android:textColor="#E0E0E0" />
+        <TextView android:id="@+id/statusPhone" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:text="✗" android:textColor="#FF6B6B" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnRequestPerms"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Grant Permissions"
+        android:backgroundTint="#6C63FF"
+        android:textColor="#FFFFFF"
+        android:layout_marginTop="16dp" />
+
+    <Button
+        android:id="@+id/btnOpenAccessibility"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enable Accessibility Service"
+        android:backgroundTint="#2A2A4E"
+        android:textColor="#E0E0E0"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout>

@@ -1,0 +1,1451 @@
+     1→import 'package:flutter/material.dart';
+     2→import 'package:permission_handler/permission_handler.dart';
+     3→import 'package:shared_preferences/shared_preferences.dart';
+     4→import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+     5→import 'dart:ui';
+     6→import '../config/feature_flags.dart';
+     7→import '../services/ai_service.dart';
+     8→import '../services/screen_automation_service.dart';
+     9→import 'home_screen.dart';
+    10→
+    11→class OnboardingScreen extends StatefulWidget {
+    12→  const OnboardingScreen({super.key});
+    13→
+    14→  @override
+    15→  State<OnboardingScreen> createState() => _OnboardingScreenState();
+    16→}
+    17→
+    18→class _OnboardingScreenState extends State<OnboardingScreen>
+    19→    with WidgetsBindingObserver {
+    20→  final PageController _pageController = PageController();
+    21→  final ScreenAutomationService _screenAutomationService =
+    22→      ScreenAutomationService();
+    23→  final AiService _aiService = AiService();
+    24→
+    25→  int _currentStep = 0;
+    26→  bool _isAccessibilityGranted = false;
+    27→  bool _isMicrophoneGranted = false;
+    28→  bool _isNotificationsGranted = false;
+    29→  bool _isContactsGranted = false;
+    30→  bool _isPhoneGranted = false;
+    31→  bool _isSmsGranted = false;
+    32→  bool _isOverlayGranted = false;
+    33→
+    34→  // AI config states
+    35→  String _selectedProvider = 'deepseek';
+    36→  final TextEditingController _apiKeyController = TextEditingController();
+    37→  final TextEditingController _baseUrlController = TextEditingController(
+    38→    text: 'https://api.deepseek.com',
+    39→  );
+    40→  final TextEditingController _modelController = TextEditingController(
+    41→    text: 'deepseek-chat',
+    42→  );
+    43→  bool _obscureKey = true;
+    44→  bool _isValidating = false;
+    45→  String? _validationError;
+    46→
+    47→  @override
+    48→  void initState() {
+    49→    super.initState();
+    50→    WidgetsBinding.instance.addObserver(this);
+    51→    _loadAiDefaults();
+    52→    _checkPermissions();
+    53→  }
+    54→
+    55→  Future<void> _loadAiDefaults() async {
+    56→    await _aiService.init();
+    57→    if (!mounted || !_aiService.isConfigured) return;
+    58→    setState(() {
+    59→      _selectedProvider = 'custom';
+    60→      _apiKeyController.text = _aiService.apiKey;
+    61→      _baseUrlController.text = _aiService.baseUrl;
+    62→      _modelController.text = _aiService.model;
+    63→    });
+    64→  }
+    65→
+    66→  @override
+    67→  void dispose() {
+    68→    WidgetsBinding.instance.removeObserver(this);
+    69→    _pageController.dispose();
+    70→    _apiKeyController.dispose();
+    71→    _baseUrlController.dispose();
+    72→    _modelController.dispose();
+    73→    super.dispose();
+    74→  }
+    75→
+    76→  @override
+    77→  void didChangeAppLifecycleState(AppLifecycleState state) {
+    78→    if (state == AppLifecycleState.resumed) {
+    79→      _checkPermissions();
+    80→    }
+    81→  }
+    82→
+    83→  Future<void> _checkPermissions() async {
+    84→    final accessibilityRunning = await _screenAutomationService
+    85→        .isServiceRunning();
+    86→    final microphoneStatus = await Permission.microphone.status;
+    87→    final notificationsStatus = await Permission.notification.status;
+    88→    final contactsStatus = await Permission.contacts.status;
+    89→    final phoneStatus = await Permission.phone.status;
+    90→    final smsStatus = await Permission.sms.status;
+    91→    final overlayGranted = FeatureFlags.floatingOverlayEnabled
+    92→        ? await FlutterOverlayWindow.isPermissionGranted()
+    93→        : false;
+    94→
+    95→    if (mounted) {
+    96→      setState(() {
+    97→        _isAccessibilityGranted = accessibilityRunning;
+    98→        _isMicrophoneGranted = microphoneStatus.isGranted;
+    99→        _isNotificationsGranted = notificationsStatus.isGranted;
+   100→        _isContactsGranted = contactsStatus.isGranted;
+   101→        _isPhoneGranted = phoneStatus.isGranted;
+   102→        _isSmsGranted = smsStatus.isGranted;
+   103→        _isOverlayGranted = overlayGranted;
+   104→      });
+   105→    }
+   106→  }
+   107→
+   108→  Future<void> _requestPermission(Permission permission) async {
+   109→    await permission.request();
+   110→    _checkPermissions();
+   111→  }
+   112→
+   113→  Future<void> _requestAccessibility() async {
+   114→    if (!mounted) return;
+   115→    await showDialog<void>(
+   116→      context: context,
+   117→      builder: (dialogContext) => AlertDialog(
+   118→        title: const Text('Enable Screen Control'),
+   119→        content: const Text(
+   120→          'If Android shows “Restricted setting”, open App Info first, tap the '
+   121→          'three-dot menu, and choose “Allow restricted settings”. Then return '
+   122→          'and open Accessibility Settings to enable PrivateAgent Screen Control.',
+   123→        ),
+   124→        actions: [
+   125→          TextButton(
+   126→            onPressed: () {
+   127→              Navigator.pop(dialogContext);
+   128→              _screenAutomationService.openAccessibilitySettings();
+   129→            },
+   130→            child: const Text('Accessibility Settings'),
+   131→          ),
+   132→          FilledButton(
+   133→            onPressed: () {
+   134→              Navigator.pop(dialogContext);
+   135→              openAppSettings();
+   136→            },
+   137→            child: const Text('Open App Info First'),
+   138→          ),
+   139→        ],
+   140→      ),
+   141→    );
+   142→  }
+   143→
+   144→  Future<void> _requestOverlayPermission() async {
+   145→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   146→    bool granted = await FlutterOverlayWindow.isPermissionGranted();
+   147→    if (!granted) {
+   148→      await FlutterOverlayWindow.requestPermission();
+   149→      granted = await FlutterOverlayWindow.isPermissionGranted();
+   150→    }
+   151→    setState(() {
+   152→      _isOverlayGranted = granted;
+   153→    });
+   154→  }
+   155→
+   156→  void _selectProvider(String provider) {
+   157→    setState(() {
+   158→      _selectedProvider = provider;
+   159→      _validationError = null;
+   160→      if (provider == 'deepseek') {
+   161→        _baseUrlController.text = 'https://api.deepseek.com';
+   162→        _modelController.text = 'deepseek-chat';
+   163→      } else if (provider == 'groq') {
+   164→        _baseUrlController.text = 'https://api.groq.com/openai/v1';
+   165→        _modelController.text = 'llama-3.3-70b-versatile';
+   166→      } else if (provider == 'nvidia') {
+   167→        _baseUrlController.text = AiService.nvidiaBaseUrl;
+   168→        _modelController.text = AiService.nvidiaDefaultModel;
+   169→      } else if (provider == 'ollama') {
+   170→        _baseUrlController.text = 'http://10.0.2.2:11434/v1';
+   171→        _modelController.text = 'gemma2';
+   172→      } else if (provider == 'local') {
+   173→        _baseUrlController.text = 'http://10.0.2.2:1234/v1';
+   174→        _modelController.text = 'qwen2.5-7b-instruct';
+   175→      } else {
+   176→        _baseUrlController.clear();
+   177→        _modelController.clear();
+   178→      }
+   179→    });
+   180→  }
+   181→
+   182→  Future<void> _testAndSave() async {
+   183→    setState(() {
+   184→      _isValidating = true;
+   185→      _validationError = null;
+   186→    });
+   187→
+   188→    final apiKey = _apiKeyController.text.trim();
+   189→    final baseUrl = _baseUrlController.text.trim();
+   190→    final model = _modelController.text.trim();
+   191→
+   192→    if (baseUrl.isEmpty || model.isEmpty) {
+   193→      setState(() {
+   194→        _validationError = 'Please fill out API Base URL and Model.';
+   195→        _isValidating = false;
+   196→      });
+   197→      return;
+   198→    }
+   199→
+   200→    if (_selectedProvider != 'ollama' &&
+   201→        _selectedProvider != 'local' &&
+   202→        apiKey.isEmpty) {
+   203→      setState(() {
+   204→        _validationError = 'API Key is required for this provider.';
+   205→        _isValidating = false;
+   206→      });
+   207→      return;
+   208→    }
+   209→
+   210→    try {
+   211→      final models = await _aiService.fetchAvailableModels(baseUrl, apiKey);
+   212→      if (models.isNotEmpty ||
+   213→          _selectedProvider == 'ollama' ||
+   214→          _selectedProvider == 'local') {
+   215→        await _aiService.saveSettings(
+   216→          apiKey: apiKey,
+   217→          baseUrl: baseUrl,
+   218→          model: model,
+   219→        );
+   220→        final prefs = await SharedPreferences.getInstance();
+   221→        await prefs.setBool('onboarding_completed', true);
+   222→
+   223→        if (mounted) {
+   224→          setState(() {
+   225→            _isValidating = false;
+   226→          });
+   227→
+   228→          ScaffoldMessenger.of(context).showSnackBar(
+   229→            SnackBar(
+   230→              content: const Text(
+   231→                'Configuration validated! Launching PrivateAgent...',
+   232→              ),
+   233→              backgroundColor: Colors.indigoAccent,
+   234→              behavior: SnackBarBehavior.floating,
+   235→              shape: RoundedRectangleBorder(
+   236→                borderRadius: BorderRadius.circular(12),
+   237→              ),
+   238→            ),
+   239→          );
+   240→
+   241→          Navigator.pushReplacement(
+   242→            context,
+   243→            MaterialPageRoute(builder: (_) => const HomeScreen()),
+   244→          );
+   245→        }
+   246→      } else {
+   247→        setState(() {
+   248→          _validationError =
+   249→              'Failed to fetch models from the server. Verify base URL and API Key.';
+   250→          _isValidating = false;
+   251→        });
+   252→      }
+   253→    } catch (e) {
+   254→      setState(() {
+   255→        _validationError =
+   256→            'Error: ${e.toString().replaceFirst('Exception: ', '')}';
+   257→        _isValidating = false;
+   258→      });
+   259→    }
+   260→  }
+   261→
+   262→  Future<void> _fetchModels() async {
+   263→    final baseUrl = _baseUrlController.text.trim();
+   264→    final apiKey = _apiKeyController.text.trim();
+   265→
+   266→    if (baseUrl.isEmpty) {
+   267→      ScaffoldMessenger.of(context).showSnackBar(
+   268→        SnackBar(
+   269→          content: const Text('Please enter an API Base URL first.'),
+   270→          backgroundColor: Colors.redAccent,
+   271→          behavior: SnackBarBehavior.floating,
+   272→          shape: RoundedRectangleBorder(
+   273→            borderRadius: BorderRadius.circular(12),
+   274→          ),
+   275→        ),
+   276→      );
+   277→      return;
+   278→    }
+   279→
+   280→    setState(() {
+   281→      _isValidating = true;
+   282→    });
+   283→
+   284→    try {
+   285→      final models = await _aiService.fetchAvailableModels(baseUrl, apiKey);
+   286→
+   287→      setState(() {
+   288→        _isValidating = false;
+   289→      });
+   290→
+   291→      if (models.isEmpty) {
+   292→        if (mounted) {
+   293→          ScaffoldMessenger.of(context).showSnackBar(
+   294→            SnackBar(
+   295→              content: const Text(
+   296→                'No models found. Check base URL or API Key.',
+   297→              ),
+   298→              backgroundColor: Colors.orangeAccent,
+   299→              behavior: SnackBarBehavior.floating,
+   300→              shape: RoundedRectangleBorder(
+   301→                borderRadius: BorderRadius.circular(12),
+   302→              ),
+   303→            ),
+   304→          );
+   305→        }
+   306→        return;
+   307→      }
+   308→
+   309→      if (mounted) {
+   310→        final isDark = Theme.of(context).brightness == Brightness.dark;
+   311→        showModalBottomSheet(
+   312→          context: context,
+   313→          backgroundColor: isDark ? const Color(0xFF161329) : Colors.white,
+   314→          shape: const RoundedRectangleBorder(
+   315→            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+   316→          ),
+   317→          builder: (context) {
+   318→            return SafeArea(
+   319→              child: Padding(
+   320→                padding: const EdgeInsets.all(24),
+   321→                child: Column(
+   322→                  mainAxisSize: MainAxisSize.min,
+   323→                  crossAxisAlignment: CrossAxisAlignment.start,
+   324→                  children: [
+   325→                    Text(
+   326→                      AiService.isNvidiaBaseUrl(baseUrl)
+   327→                          ? 'Select a Free NVIDIA Model'
+   328→                          : 'Select a Model',
+   329→                      style: TextStyle(
+   330→                        fontSize: 18,
+   331→                        fontWeight: FontWeight.bold,
+   332→                        color: isDark ? Colors.white : Colors.black87,
+   333→                      ),
+   334→                    ),
+   335→                    const SizedBox(height: 16),
+   336→                    Expanded(
+   337→                      child: ListView.builder(
+   338→                        physics: const BouncingScrollPhysics(),
+   339→                        itemCount: models.length,
+   340→                        itemBuilder: (context, index) {
+   341→                          final modelName = models[index];
+   342→                          return ListTile(
+   343→                            contentPadding: const EdgeInsets.symmetric(
+   344→                              horizontal: 8,
+   345→                            ),
+   346→                            title: Text(
+   347→                              modelName,
+   348→                              style: TextStyle(
+   349→                                fontSize: 14,
+   350→                                fontWeight: FontWeight.w500,
+   351→                                color: isDark ? Colors.white70 : Colors.black87,
+   352→                              ),
+   353→                            ),
+   354→                            trailing: const Icon(
+   355→                              Icons.chevron_right_rounded,
+   356→                              size: 18,
+   357→                            ),
+   358→                            onTap: () {
+   359→                              setState(() {
+   360→                                _modelController.text = modelName;
+   361→                              });
+   362→                              Navigator.pop(context);
+   363→                            },
+   364→                          );
+   365→                        },
+   366→                      ),
+   367→                    ),
+   368→                  ],
+   369→                ),
+   370→              ),
+   371→            );
+   372→          },
+   373→        );
+   374→      }
+   375→    } catch (e) {
+   376→      setState(() {
+   377→        _isValidating = false;
+   378→      });
+   379→      if (mounted) {
+   380→        ScaffoldMessenger.of(context).showSnackBar(
+   381→          SnackBar(
+   382→            content: Text(
+   383→              'Error: ${e.toString().replaceFirst('Exception: ', '')}',
+   384→            ),
+   385→            backgroundColor: Colors.redAccent,
+   386→            behavior: SnackBarBehavior.floating,
+   387→            shape: RoundedRectangleBorder(
+   388→              borderRadius: BorderRadius.circular(12),
+   389→            ),
+   390→          ),
+   391→        );
+   392→      }
+   393→    }
+   394→  }
+   395→
+   396→  bool get _canProceedToModel {
+   397→    return _isAccessibilityGranted &&
+   398→        _isMicrophoneGranted &&
+   399→        (!FeatureFlags.floatingOverlayEnabled || _isOverlayGranted);
+   400→  }
+   401→
+   402→  @override
+   403→  Widget build(BuildContext context) {
+   404→    final isDark = Theme.of(context).brightness == Brightness.dark;
+   405→
+   406→    return Scaffold(
+   407→      backgroundColor: isDark
+   408→          ? const Color(0xFF0B0F19)
+   409→          : const Color(0xFFF8FAFC),
+   410→      body: Stack(
+   411→        children: [
+   412→          // Background fluid glow effect
+   413→          _buildBackgroundGlows(isDark),
+   414→
+   415→          // Blur filter over background glows
+   416→          Positioned.fill(
+   417→            child: BackdropFilter(
+   418→              filter: ImageFilter.blur(sigmaX: 120, sigmaY: 120),
+   419→              child: Container(color: Colors.transparent),
+   420→            ),
+   421→          ),
+   422→
+   423→          SafeArea(
+   424→            child: Column(
+   425→              children: [
+   426→                // Top Custom Animated Stepper Bar
+   427→                Padding(
+   428→                  padding: const EdgeInsets.only(
+   429→                    top: 24,
+   430→                    left: 32,
+   431→                    right: 32,
+   432→                    bottom: 8,
+   433→                  ),
+   434→                  child: _buildAnimatedStepper(isDark),
+   435→                ),
+   436→
+   437→                Expanded(
+   438→                  child: PageView(
+   439→                    controller: _pageController,
+   440→                    physics: const NeverScrollableScrollPhysics(),
+   441→                    onPageChanged: (page) {
+   442→                      setState(() {
+   443→                        _currentStep = page;
+   444→                      });
+   445→                    },
+   446→                    children: [
+   447→                      _buildWelcomePage(isDark),
+   448→                      _buildPermissionsPage(isDark),
+   449→                      _buildModelSetupPage(isDark),
+   450→                    ],
+   451→                  ),
+   452→                ),
+   453→              ],
+   454→            ),
+   455→          ),
+   456→        ],
+   457→      ),
+   458→    );
+   459→  }
+   460→
+   461→  Widget _buildBackgroundGlows(bool isDark) {
+   462→    return Positioned.fill(
+   463→      child: Stack(
+   464→        children: [
+   465→          Positioned(
+   466→            top: -100,
+   467→            right: -100,
+   468→            child: Container(
+   469→              width: 350,
+   470→              height: 350,
+   471→              decoration: BoxDecoration(
+   472→                shape: BoxShape.circle,
+   473→                gradient: RadialGradient(
+   474→                  colors: [
+   475→                    isDark
+   476→                        ? const Color(0xFF6366F1).withOpacity(0.18)
+   477→                        : const Color(0xFF4F46E5).withOpacity(0.08),
+   478→                    isDark
+   479→                        ? const Color(0xFF6366F1).withOpacity(0)
+   480→                        : const Color(0xFF4F46E5).withOpacity(0),
+   481→                  ],
+   482→                ),
+   483→              ),
+   484→            ),
+   485→          ),
+   486→          Positioned(
+   487→            bottom: -50,
+   488→            left: -100,
+   489→            child: Container(
+   490→              width: 300,
+   491→              height: 300,
+   492→              decoration: BoxDecoration(
+   493→                shape: BoxShape.circle,
+   494→                gradient: RadialGradient(
+   495→                  colors: [
+   496→                    isDark
+   497→                        ? const Color(0xFF38BDF8).withOpacity(0.15)
+   498→                        : const Color(0xFF0EA5E9).withOpacity(0.06),
+   499→                    isDark
+   500→                        ? const Color(0xFF38BDF8).withOpacity(0)
+   501→                        : const Color(0xFF0EA5E9).withOpacity(0),
+   502→                  ],
+   503→                ),
+   504→              ),
+   505→            ),
+   506→          ),
+   507→        ],
+   508→      ),
+   509→    );
+   510→  }
+   511→
+   512→  Widget _buildAnimatedStepper(bool isDark) {
+   513→    return Column(
+   514→      children: [
+   515→        Row(
+   516→          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+   517→          children: List.generate(3, (index) {
+   518→            final isActive = _currentStep == index;
+   519→            final isCompleted = _currentStep > index;
+   520→
+   521→            return AnimatedContainer(
+   522→              duration: const Duration(milliseconds: 400),
+   523→              curve: Curves.easeOutCubic,
+   524→              height: 6,
+   525→              width: isActive
+   526→                  ? MediaQuery.of(context).size.width * 0.35
+   527→                  : MediaQuery.of(context).size.width * 0.22,
+   528→              decoration: BoxDecoration(
+   529→                borderRadius: BorderRadius.circular(10),
+   530→                color: isActive
+   531→                    ? Theme.of(context).primaryColor
+   532→                    : isCompleted
+   533→                    ? Theme.of(context).primaryColor.withOpacity(0.5)
+   534→                    : (isDark
+   535→                          ? const Color(0xFF1E293B)
+   536→                          : const Color(0xFFE2E8F0)),
+   537→                boxShadow: isActive
+   538→                    ? [
+   539→                        BoxShadow(
+   540→                          color: Theme.of(
+   541→                            context,
+   542→                          ).primaryColor.withOpacity(0.25),
+   543→                          blurRadius: 8,
+   544→                          offset: const Offset(0, 2),
+   545→                        ),
+   546→                      ]
+   547→                    : null,
+   548→              ),
+   549→            );
+   550→          }),
+   551→        ),
+   552→        const SizedBox(height: 12),
+   553→        Row(
+   554→          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+   555→          children: [
+   556→            _buildStepperLabel(0, 'Welcome'),
+   557→            _buildStepperLabel(1, 'Permissions'),
+   558→            _buildStepperLabel(2, 'AI Setup'),
+   559→          ],
+   560→        ),
+   561→      ],
+   562→    );
+   563→  }
+   564→
+   565→  Widget _buildStepperLabel(int index, String text) {
+   566→    final isActive = _currentStep == index;
+   567→    final isCompleted = _currentStep > index;
+   568→    final isDark = Theme.of(context).brightness == Brightness.dark;
+   569→
+   570→    return Text(
+   571→      text,
+   572→      style: TextStyle(
+   573→        fontSize: 12,
+   574→        fontWeight: isActive ? FontWeight.bold : FontWeight.w600,
+   575→        color: isActive
+   576→            ? Theme.of(context).primaryColor
+   577→            : isCompleted
+   578→            ? (isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569))
+   579→            : (isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8)),
+   580→      ),
+   581→    );
+   582→  }
+   583→
+   584→  // --- STEP 1: WELCOME SCREEN ---
+   585→  Widget _buildWelcomePage(bool isDark) {
+   586→    return Padding(
+   587→      padding: const EdgeInsets.symmetric(horizontal: 32),
+   588→      child: Column(
+   589→        mainAxisAlignment: MainAxisAlignment.center,
+   590→        children: [
+   591→          const Spacer(flex: 3),
+   592→          // Large Custom Glowing Logo Container
+   593→          Stack(
+   594→            alignment: Alignment.center,
+   595→            children: [
+   596→              // Outer Halo Glow
+   597→              Container(
+   598→                width: 170,
+   599→                height: 170,
+   600→                decoration: BoxDecoration(
+   601→                  shape: BoxShape.circle,
+   602→                  color: Theme.of(context).primaryColor.withOpacity(0.12),
+   603→                ),
+   604→              ),
+   605→              Container(
+   606→                width: 140,
+   607→                height: 140,
+   608→                decoration: BoxDecoration(
+   609→                  shape: BoxShape.circle,
+   610→                  color: isDark ? const Color(0xFF151D30) : Colors.white,
+   611→                  boxShadow: [
+   612→                    BoxShadow(
+   613→                      color: Colors.black.withOpacity(isDark ? 0.25 : 0.08),
+   614→                      blurRadius: 25,
+   615→                      offset: const Offset(0, 10),
+   616→                    ),
+   617→                  ],
+   618→                  border: Border.all(
+   619→                    color: Theme.of(context).primaryColor.withOpacity(0.15),
+   620→                    width: 1.5,
+   621→                  ),
+   622→                ),
+   623→                child: Icon(
+   624→                  Icons.smart_toy_rounded,
+   625→                  size: 70,
+   626→                  color: Theme.of(context).primaryColor,
+   627→                ),
+   628→              ),
+   629→            ],
+   630→          ),
+   631→          const Spacer(flex: 2),
+   632→          // Clean Title
+   633→          Text(
+   634→            'PrivateAgent',
+   635→            style: TextStyle(
+   636→              fontSize: 38,
+   637→              fontWeight: FontWeight.w900,
+   638→              color: isDark ? Colors.white : const Color(0xFF1E293B),
+   639→              letterSpacing: -0.5,
+   640→            ),
+   641→          ),
+   642→          const SizedBox(height: 16),
+   643→          Text(
+   644→            'Your local, secure, and smart mobile companion. PrivateAgent can navigate apps, perform operations, and speak with you.',
+   645→            textAlign: TextAlign.center,
+   646→            style: TextStyle(
+   647→              fontSize: 15,
+   648→              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+   649→              height: 1.55,
+   650→            ),
+   651→          ),
+   652→          const Spacer(flex: 2),
+   653→
+   654→          // Custom Sleek Features list
+   655→          _buildFeatureCard(
+   656→            Icons.vpn_key_outlined,
+   657→            'Local & Private',
+   658→            'Full support for local-first execution. Keys remain encrypted locally.',
+   659→            isDark,
+   660→          ),
+   661→          const SizedBox(height: 12),
+   662→          _buildFeatureCard(
+   663→            Icons.ads_click_rounded,
+   664→            'Automated Actions',
+   665→            'Can read your screen and perform operations across other apps.',
+   666→            isDark,
+   667→          ),
+   668→
+   669→          const Spacer(flex: 3),
+   670→          // Get Started button
+   671→          Container(
+   672→            width: double.infinity,
+   673→            height: 56,
+   674→            decoration: BoxDecoration(
+   675→              borderRadius: BorderRadius.circular(18),
+   676→              color: Theme.of(context).colorScheme.primary,
+   677→              boxShadow: [
+   678→                BoxShadow(
+   679→                  color: Theme.of(
+   680→                    context,
+   681→                  ).colorScheme.primary.withOpacity(0.25),
+   682→                  blurRadius: 15,
+   683→                  offset: const Offset(0, 6),
+   684→                ),
+   685→              ],
+   686→            ),
+   687→            child: ElevatedButton(
+   688→              onPressed: () {
+   689→                _pageController.nextPage(
+   690→                  duration: const Duration(milliseconds: 400),
+   691→                  curve: Curves.easeOutCubic,
+   692→                );
+   693→              },
+   694→              style: ElevatedButton.styleFrom(
+   695→                backgroundColor: Colors.transparent,
+   696→                foregroundColor: Colors.white,
+   697→                shadowColor: Colors.transparent,
+   698→                shape: RoundedRectangleBorder(
+   699→                  borderRadius: BorderRadius.circular(18),
+   700→                ),
+   701→              ),
+   702→              child: const Row(
+   703→                mainAxisAlignment: MainAxisAlignment.center,
+   704→                children: [
+   705→                  Text(
+   706→                    'Get Started',
+   707→                    style: TextStyle(
+   708→                      fontSize: 16,
+   709→                      fontWeight: FontWeight.bold,
+   710→                      letterSpacing: 0.2,
+   711→                    ),
+   712→                  ),
+   713→                  SizedBox(width: 10),
+   714→                  Icon(Icons.arrow_forward_rounded, size: 20),
+   715→                ],
+   716→              ),
+   717→            ),
+   718→          ),
+   719→          const SizedBox(height: 24),
+   720→        ],
+   721→      ),
+   722→    );
+   723→  }
+   724→
+   725→  Widget _buildFeatureCard(
+   726→    IconData icon,
+   727→    String title,
+   728→    String subtitle,
+   729→    bool isDark,
+   730→  ) {
+   731→    return Container(
+   732→      padding: const EdgeInsets.all(16),
+   733→      decoration: BoxDecoration(
+   734→        color: Theme.of(context).cardTheme.color,
+   735→        borderRadius: BorderRadius.circular(20),
+   736→        border: Border.all(
+   737→          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.06),
+   738→          width: 1.2,
+   739→        ),
+   740→      ),
+   741→      child: Row(
+   742→        children: [
+   743→          Container(
+   744→            padding: const EdgeInsets.all(10),
+   745→            decoration: BoxDecoration(
+   746→              color: Theme.of(context).primaryColor.withOpacity(0.12),
+   747→              shape: BoxShape.circle,
+   748→            ),
+   749→            child: Icon(icon, size: 22, color: Theme.of(context).primaryColor),
+   750→          ),
+   751→          const SizedBox(width: 16),
+   752→          Expanded(
+   753→            child: Column(
+   754→              crossAxisAlignment: CrossAxisAlignment.start,
+   755→              children: [
+   756→                Text(
+   757→                  title,
+   758→                  style: const TextStyle(
+   759→                    fontWeight: FontWeight.bold,
+   760→                    fontSize: 14,
+   761→                  ),
+   762→                ),
+   763→                const SizedBox(height: 3),
+   764→                Text(
+   765→                  subtitle,
+   766→                  style: TextStyle(
+   767→                    fontSize: 12,
+   768→                    color: isDark
+   769→                        ? const Color(0xFF94A3B8)
+   770→                        : const Color(0xFF475569),
+   771→                  ),
+   772→                ),
+   773→              ],
+   774→            ),
+   775→          ),
+   776→        ],
+   777→      ),
+   778→    );
+   779→  }
+   780→
+   781→  // --- STEP 2: PERMISSIONS SCREEN ---
+   782→  Widget _buildPermissionsPage(bool isDark) {
+   783→    return Padding(
+   784→      padding: const EdgeInsets.symmetric(horizontal: 24),
+   785→      child: Column(
+   786→        crossAxisAlignment: CrossAxisAlignment.start,
+   787→        children: [
+   788→          const SizedBox(height: 24),
+   789→          const Text(
+   790→            'Configure Permissions',
+   791→            style: TextStyle(
+   792→              fontSize: 24,
+   793→              fontWeight: FontWeight.w900,
+   794→              letterSpacing: -0.5,
+   795→            ),
+   796→          ),
+   797→          const SizedBox(height: 6),
+   798→          Text(
+   799→            'Permissions are needed to interact with other apps.',
+   800→            style: TextStyle(
+   801→              fontSize: 14,
+   802→              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+   803→            ),
+   804→          ),
+   805→          const SizedBox(height: 16),
+   806→          Expanded(
+   807→            child: ListView(
+   808→              physics: const BouncingScrollPhysics(),
+   809→              children: [
+   810→                _buildSectionHeader('MANDATORY', isDark),
+   811→                _buildPermissionCard(
+   812→                  'Screen Control (Accessibility)',
+   813→                  'Allows the AI to read your screen and automatically perform clicks, scrolls, and typing to execute tasks across other apps on your phone.',
+   814→                  Icons.visibility_rounded,
+   815→                  _isAccessibilityGranted,
+   816→                  _requestAccessibility,
+   817→                  isDark,
+   818→                ),
+   819→                const SizedBox(height: 12),
+   820→                _buildPermissionCard(
+   821→                  'Microphone',
+   822→                  'Required to listen to your voice commands and convert speech to text.',
+   823→                  Icons.mic_rounded,
+   824→                  _isMicrophoneGranted,
+   825→                  () => _requestPermission(Permission.microphone),
+   826→                  isDark,
+   827→                ),
+   828→                if (FeatureFlags.floatingOverlayEnabled) ...[
+   829→                  const SizedBox(height: 12),
+   830→                  _buildPermissionCard(
+   831→                    'Display Over Other Apps (Floating Bubble)',
+   832→                    'Allows PrivateAgent to show a floating overlay bubble when backgrounded or executing a task so you can monitor progress and execute actions.',
+   833→                    Icons.layers_rounded,
+   834→                    _isOverlayGranted,
+   835→                    _requestOverlayPermission,
+   836→                    isDark,
+   837→                  ),
+   838→                ],
+   839→                const SizedBox(height: 20),
+   840→                _buildSectionHeader('OPTIONAL', isDark),
+   841→                _buildPermissionCard(
+   842→                  'Notifications',
+   843→                  'Allows PrivateAgent to show ongoing tasks, alerts, and execution updates in your notification tray.',
+   844→                  Icons.notifications_rounded,
+   845→                  _isNotificationsGranted,
+   846→                  () => _requestPermission(Permission.notification),
+   847→                  isDark,
+   848→                ),
+   849→                const SizedBox(height: 12),
+   850→                _buildPermissionCard(
+   851→                  'Contacts',
+   852→                  'Used to look up phone numbers and contact names when you ask the AI to call or text someone.',
+   853→                  Icons.contacts_rounded,
+   854→                  _isContactsGranted,
+   855→                  () => _requestPermission(Permission.contacts),
+   856→                  isDark,
+   857→                ),
+   858→                const SizedBox(height: 12),
+   859→                _buildPermissionCard(
+   860→                  'Phone',
+   861→                  'Enables the AI to dial phone calls on your behalf when requested.',
+   862→                  Icons.phone_rounded,
+   863→                  _isPhoneGranted,
+   864→                  () => _requestPermission(Permission.phone),
+   865→                  isDark,
+   866→                ),
+   867→                const SizedBox(height: 12),
+   868→                _buildPermissionCard(
+   869→                  'SMS',
+   870→                  'Allows the AI to send and read text messages on your behalf when requested.',
+   871→                  Icons.sms_rounded,
+   872→                  _isSmsGranted,
+   873→                  () => _requestPermission(Permission.sms),
+   874→                  isDark,
+   875→                ),
+   876→                const SizedBox(height: 24),
+   877→              ],
+   878→            ),
+   879→          ),
+   880→
+   881→          // Bottom Navigation Row
+   882→          Row(
+   883→            children: [
+   884→              TextButton(
+   885→                onPressed: () {
+   886→                  _pageController.previousPage(
+   887→                    duration: const Duration(milliseconds: 400),
+   888→                    curve: Curves.easeOutCubic,
+   889→                  );
+   890→                },
+   891→                style: TextButton.styleFrom(
+   892→                  foregroundColor: isDark
+   893→                      ? Colors.white
+   894→                      : const Color(0xFF475569),
+   895→                ),
+   896→                child: const Text(
+   897→                  'Back',
+   898→                  style: TextStyle(fontWeight: FontWeight.bold),
+   899→                ),
+   900→              ),
+   901→              const Spacer(),
+   902→              Container(
+   903→                height: 48,
+   904→                decoration: BoxDecoration(
+   905→                  borderRadius: BorderRadius.circular(14),
+   906→                  color: _canProceedToModel
+   907→                      ? Theme.of(context).colorScheme.primary
+   908→                      : (isDark
+   909→                            ? const Color(0xFF1E293B)
+   910→                            : const Color(0xFFE2E8F0)),
+   911→                  boxShadow: _canProceedToModel
+   912→                      ? [
+   913→                          BoxShadow(
+   914→                            color: Theme.of(
+   915→                              context,
+   916→                            ).colorScheme.primary.withOpacity(0.25),
+   917→                            blurRadius: 10,
+   918→                            offset: const Offset(0, 4),
+   919→                          ),
+   920→                        ]
+   921→                      : null,
+   922→                ),
+   923→                child: ElevatedButton(
+   924→                  onPressed: _canProceedToModel
+   925→                      ? () {
+   926→                          _pageController.nextPage(
+   927→                            duration: const Duration(milliseconds: 400),
+   928→                            curve: Curves.easeOutCubic,
+   929→                          );
+   930→                        }
+   931→                      : null,
+   932→                  style: ElevatedButton.styleFrom(
+   933→                    backgroundColor: Colors.transparent,
+   934→                    foregroundColor: Colors.white,
+   935→                    shadowColor: Colors.transparent,
+   936→                    disabledForegroundColor: isDark
+   937→                        ? const Color(0xFF475569)
+   938→                        : const Color(0xFF94A3B8),
+   939→                    shape: RoundedRectangleBorder(
+   940→                      borderRadius: BorderRadius.circular(14),
+   941→                    ),
+   942→                    padding: const EdgeInsets.symmetric(horizontal: 24),
+   943→                  ),
+   944→                  child: const Row(
+   945→                    children: [
+   946→                      Text(
+   947→                        'Next',
+   948→                        style: TextStyle(fontWeight: FontWeight.bold),
+   949→                      ),
+   950→                      SizedBox(width: 8),
+   951→                      Icon(Icons.arrow_forward_rounded, size: 16),
+   952→                    ],
+   953→                  ),
+   954→                ),
+   955→              ),
+   956→            ],
+   957→          ),
+   958→          const SizedBox(height: 24),
+   959→        ],
+   960→      ),
+   961→    );
+   962→  }
+   963→
+   964→  Widget _buildSectionHeader(String title, bool isDark) {
+   965→    return Padding(
+   966→      padding: const EdgeInsets.only(bottom: 8, top: 4, left: 4),
+   967→      child: Text(
+   968→        title,
+   969→        style: TextStyle(
+   970→          fontSize: 11,
+   971→          fontWeight: FontWeight.w800,
+   972→          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+   973→          letterSpacing: 1.5,
+   974→        ),
+   975→      ),
+   976→    );
+   977→  }
+   978→
+   979→  Widget _buildPermissionCard(
+   980→    String title,
+   981→    String description,
+   982→    IconData icon,
+   983→    bool isGranted,
+   984→    VoidCallback onGrant,
+   985→    bool isDark,
+   986→  ) {
+   987→    return Container(
+   988→      margin: const EdgeInsets.only(bottom: 12),
+   989→      decoration: BoxDecoration(
+   990→        color: Theme.of(context).colorScheme.surface,
+   991→        borderRadius: BorderRadius.circular(22),
+   992→        border: Border.all(
+   993→          color: isGranted
+   994→              ? Colors.green.withOpacity(0.3)
+   995→              : Theme.of(context).colorScheme.onSurface.withOpacity(0.08),
+   996→          width: 1.2,
+   997→        ),
+   998→        boxShadow: [
+   999→          BoxShadow(
+  1000→            color: Colors.black.withOpacity(isDark ? 0.2 : 0.03),
+  1001→            blurRadius: 12,
+  1002→            offset: const Offset(0, 6),
+  1003→          ),
+  1004→        ],
+  1005→      ),
+  1006→      child: ClipRRect(
+  1007→        borderRadius: BorderRadius.circular(22),
+  1008→        child: Padding(
+  1009→          padding: const EdgeInsets.all(16),
+  1010→          child: Column(
+  1011→            crossAxisAlignment: CrossAxisAlignment.start,
+  1012→            children: [
+  1013→              Row(
+  1014→                children: [
+  1015→                  Container(
+  1016→                    padding: const EdgeInsets.all(10),
+  1017→                    decoration: BoxDecoration(
+  1018→                      color: Theme.of(context).primaryColor.withOpacity(0.12),
+  1019→                      shape: BoxShape.circle,
+  1020→                    ),
+  1021→                    child: Icon(
+  1022→                      icon,
+  1023→                      size: 20,
+  1024→                      color: Theme.of(context).primaryColor,
+  1025→                    ),
+  1026→                  ),
+  1027→                  const SizedBox(width: 14),
+  1028→                  Expanded(
+  1029→                    child: Text(
+  1030→                      title,
+  1031→                      style: const TextStyle(
+  1032→                        fontWeight: FontWeight.bold,
+  1033→                        fontSize: 14,
+  1034→                      ),
+  1035→                    ),
+  1036→                  ),
+  1037→                  if (isGranted)
+  1038→                    const Icon(
+  1039→                      Icons.check_circle_rounded,
+  1040→                      color: Colors.green,
+  1041→                      size: 24,
+  1042→                    )
+  1043→                  else
+  1044→                    ElevatedButton(
+  1045→                      onPressed: onGrant,
+  1046→                      style: ElevatedButton.styleFrom(
+  1047→                        backgroundColor: Theme.of(context).colorScheme.primary,
+  1048→                        foregroundColor: Colors.white,
+  1049→                        elevation: 0,
+  1050→                        padding: const EdgeInsets.symmetric(horizontal: 16),
+  1051→                        shape: RoundedRectangleBorder(
+  1052→                          borderRadius: BorderRadius.circular(10),
+  1053→                        ),
+  1054→                        minimumSize: const Size(60, 36),
+  1055→                      ),
+  1056→                      child: const Text(
+  1057→                        'Grant',
+  1058→                        style: TextStyle(
+  1059→                          fontSize: 12,
+  1060→                          fontWeight: FontWeight.bold,
+  1061→                        ),
+  1062→                      ),
+  1063→                    ),
+  1064→                ],
+  1065→              ),
+  1066→              const SizedBox(height: 10),
+  1067→              Text(
+  1068→                description,
+  1069→                style: TextStyle(
+  1070→                  fontSize: 12.5,
+  1071→                  height: 1.45,
+  1072→                  color: isDark
+  1073→                      ? const Color(0xFF94A3B8)
+  1074→                      : const Color(0xFF475569),
+  1075→                ),
+  1076→              ),
+  1077→            ],
+  1078→          ),
+  1079→        ),
+  1080→      ),
+  1081→    );
+  1082→  }
+  1083→
+  1084→  // --- STEP 3: MODEL SETUP SCREEN ---
+  1085→  Widget _buildModelSetupPage(bool isDark) {
+  1086→    return Padding(
+  1087→      padding: const EdgeInsets.symmetric(horizontal: 24),
+  1088→      child: Column(
+  1089→        crossAxisAlignment: CrossAxisAlignment.start,
+  1090→        children: [
+  1091→          const SizedBox(height: 24),
+  1092→          const Text(
+  1093→            'Configure AI Model',
+  1094→            style: TextStyle(
+  1095→              fontSize: 24,
+  1096→              fontWeight: FontWeight.w900,
+  1097→              letterSpacing: -0.5,
+  1098→            ),
+  1099→          ),
+  1100→          const SizedBox(height: 4),
+  1101→          Text(
+  1102→            'Select a provider to prefill API details automatically.',
+  1103→            style: TextStyle(
+  1104→              fontSize: 13,
+  1105→              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+  1106→            ),
+  1107→          ),
+  1108→          const SizedBox(height: 20),
+  1109→
+  1110→          // Providers Grid/List
+  1111→          SizedBox(
+  1112→            height: 90,
+  1113→            child: ListView(
+  1114→              scrollDirection: Axis.horizontal,
+  1115→              physics: const BouncingScrollPhysics(),
+  1116→              children: [
+  1117→                _buildProviderCard(
+  1118→                  'deepseek',
+  1119→                  'DeepSeek',
+  1120→                  Icons.analytics_rounded,
+  1121→                  isDark,
+  1122→                ),
+  1123→                const SizedBox(width: 10),
+  1124→                _buildProviderCard('groq', 'Groq', Icons.speed_rounded, isDark),
+  1125→                const SizedBox(width: 10),
+  1126→                _buildProviderCard(
+  1127→                  'nvidia',
+  1128→                  'NVIDIA',
+  1129→                  Icons.memory_rounded,
+  1130→                  isDark,
+  1131→                ),
+  1132→                const SizedBox(width: 10),
+  1133→                _buildProviderCard(
+  1134→                  'ollama',
+  1135→                  'Ollama',
+  1136→                  Icons.computer_rounded,
+  1137→                  isDark,
+  1138→                ),
+  1139→                const SizedBox(width: 10),
+  1140→                _buildProviderCard(
+  1141→                  'local',
+  1142→                  'Local Server',
+  1143→                  Icons.dns_rounded,
+  1144→                  isDark,
+  1145→                ),
+  1146→                const SizedBox(width: 10),
+  1147→                _buildProviderCard(
+  1148→                  'custom',
+  1149→                  'Custom',
+  1150→                  Icons.settings_suggest_rounded,
+  1151→                  isDark,
+  1152→                ),
+  1153→              ],
+  1154→            ),
+  1155→          ),
+  1156→          const SizedBox(height: 24),
+  1157→
+  1158→          Expanded(
+  1159→            child: ListView(
+  1160→              physics: const BouncingScrollPhysics(),
+  1161→              children: [
+  1162→                if (_selectedProvider != 'ollama' &&
+  1163→                    _selectedProvider != 'local') ...[
+  1164→                  _buildFormTextField(
+  1165→                    controller: _apiKeyController,
+  1166→                    label: 'API Key',
+  1167→                    hint: 'sk-xxxxxxxxxxxx',
+  1168→                    obscure: _obscureKey,
+  1169→                    isDark: isDark,
+  1170→                    suffix: IconButton(
+  1171→                      icon: Icon(
+  1172→                        _obscureKey
+  1173→                            ? Icons.visibility_off_rounded
+  1174→                            : Icons.visibility_rounded,
+  1175→                        color: Colors.grey,
+  1176→                      ),
+  1177→                      onPressed: () =>
+  1178→                          setState(() => _obscureKey = !_obscureKey),
+  1179→                    ),
+  1180→                  ),
+  1181→                  const SizedBox(height: 16),
+  1182→                ],
+  1183→                _buildFormTextField(
+  1184→                  controller: _baseUrlController,
+  1185→                  label: 'API Base URL',
+  1186→                  hint: 'https://api.deepseek.com',
+  1187→                  isDark: isDark,
+  1188→                ),
+  1189→                const SizedBox(height: 16),
+  1190→                _buildFormTextField(
+  1191→                  controller: _modelController,
+  1192→                  label: 'Model Name',
+  1193→                  hint: 'deepseek-chat',
+  1194→                  isDark: isDark,
+  1195→                  suffix: IconButton(
+  1196→                    icon: _isValidating
+  1197→                        ? SizedBox(
+  1198→                            width: 18,
+  1199→                            height: 18,
+  1200→                            child: CircularProgressIndicator(
+  1201→                              strokeWidth: 2,
+  1202→                              valueColor: AlwaysStoppedAnimation<Color>(
+  1203→                                isDark ? Colors.white : Colors.black,
+  1204→                              ),
+  1205→                            ),
+  1206→                          )
+  1207→                        : Icon(
+  1208→                            Icons.sync_rounded,
+  1209→                            color: isDark ? Colors.white : Colors.black,
+  1210→                          ),
+  1211→                    tooltip: 'Fetch models list',
+  1212→                    onPressed: _isValidating ? null : _fetchModels,
+  1213→                  ),
+  1214→                ),
+  1215→
+  1216→                if (_validationError != null) ...[
+  1217→                  const SizedBox(height: 16),
+  1218→                  Container(
+  1219→                    padding: const EdgeInsets.all(12),
+  1220→                    decoration: BoxDecoration(
+  1221→                      color: Colors.redAccent.withOpacity(0.1),
+  1222→                      borderRadius: BorderRadius.circular(12),
+  1223→                      border: Border.all(
+  1224→                        color: Colors.redAccent.withOpacity(0.2),
+  1225→                      ),
+  1226→                    ),
+  1227→                    child: Text(
+  1228→                      _validationError!,
+  1229→                      style: const TextStyle(
+  1230→                        color: Colors.redAccent,
+  1231→                        fontSize: 13,
+  1232→                        height: 1.4,
+  1233→                      ),
+  1234→                    ),
+  1235→                  ),
+  1236→                ],
+  1237→                const SizedBox(height: 32),
+  1238→              ],
+  1239→            ),
+  1240→          ),
+  1241→
+  1242→          // Action Buttons Row
+  1243→          Row(
+  1244→            children: [
+  1245→              TextButton(
+  1246→                onPressed: _isValidating
+  1247→                    ? null
+  1248→                    : () {
+  1249→                        _pageController.previousPage(
+  1250→                          duration: const Duration(milliseconds: 400),
+  1251→                          curve: Curves.easeOutCubic,
+  1252→                        );
+  1253→                      },
+  1254→                style: TextButton.styleFrom(
+  1255→                  foregroundColor: isDark
+  1256→                      ? Colors.white
+  1257→                      : const Color(0xFF475569),
+  1258→                ),
+  1259→                child: const Text(
+  1260→                  'Back',
+  1261→                  style: TextStyle(fontWeight: FontWeight.bold),
+  1262→                ),
+  1263→              ),
+  1264→              const Spacer(),
+  1265→              Container(
+  1266→                height: 52,
+  1267→                decoration: BoxDecoration(
+  1268→                  borderRadius: BorderRadius.circular(16),
+  1269→                  color: _isValidating
+  1270→                      ? (isDark
+  1271→                            ? const Color(0xFF1E293B)
+  1272→                            : const Color(0xFFE2E8F0))
+  1273→                      : Theme.of(context).colorScheme.primary,
+  1274→                  boxShadow: _isValidating
+  1275→                      ? null
+  1276→                      : [
+  1277→                          BoxShadow(
+  1278→                            color: Theme.of(
+  1279→                              context,
+  1280→                            ).colorScheme.primary.withOpacity(0.25),
+  1281→                            blurRadius: 12,
+  1282→                            offset: const Offset(0, 5),
+  1283→                          ),
+  1284→                        ],
+  1285→                ),
+  1286→                child: ElevatedButton(
+  1287→                  onPressed: _isValidating ? null : _testAndSave,
+  1288→                  style: ElevatedButton.styleFrom(
+  1289→                    backgroundColor: Colors.transparent,
+  1290→                    foregroundColor: Colors.white,
+  1291→                    shadowColor: Colors.transparent,
+  1292→                    shape: RoundedRectangleBorder(
+  1293→                      borderRadius: BorderRadius.circular(16),
+  1294→                    ),
+  1295→                    padding: const EdgeInsets.symmetric(horizontal: 28),
+  1296→                  ),
+  1297→                  child: _isValidating
+  1298→                      ? const SizedBox(
+  1299→                          width: 22,
+  1300→                          height: 22,
+  1301→                          child: CircularProgressIndicator(
+  1302→                            strokeWidth: 2.5,
+  1303→                            valueColor: AlwaysStoppedAnimation<Color>(
+  1304→                              Colors.white,
+  1305→                            ),
+  1306→                          ),
+  1307→                        )
+  1308→                      : const Row(
+  1309→                          children: [
+  1310→                            Text(
+  1311→                              'Finish Setup',
+  1312→                              style: TextStyle(
+  1313→                                fontWeight: FontWeight.bold,
+  1314→                                fontSize: 15,
+  1315→                              ),
+  1316→                            ),
+  1317→                            SizedBox(width: 8),
+  1318→                            Icon(Icons.check_circle_outline_rounded, size: 20),
+  1319→                          ],
+  1320→                        ),
+  1321→                ),
+  1322→              ),
+  1323→            ],
+  1324→          ),
+  1325→          const SizedBox(height: 24),
+  1326→        ],
+  1327→      ),
+  1328→    );
+  1329→  }
+  1330→
+  1331→  Widget _buildProviderCard(
+  1332→    String id,
+  1333→    String label,
+  1334→    IconData icon,
+  1335→    bool isDark,
+  1336→  ) {
+  1337→    final isSelected = _selectedProvider == id;
+  1338→
+  1339→    return Container(
+  1340→      width: 104,
+  1341→      decoration: BoxDecoration(
+  1342→        borderRadius: BorderRadius.circular(20),
+  1343→        border: Border.all(
+  1344→          color: isSelected
+  1345→              ? Theme.of(context).colorScheme.primary
+  1346→              : Theme.of(context).colorScheme.onSurface.withOpacity(0.08),
+  1347→          width: isSelected ? 2 : 1.2,
+  1348→        ),
+  1349→        boxShadow: isSelected
+  1350→            ? [
+  1351→                BoxShadow(
+  1352→                  color: Theme.of(
+  1353→                    context,
+  1354→                  ).colorScheme.primary.withOpacity(0.15),
+  1355→                  blurRadius: 10,
+  1356→                  offset: const Offset(0, 4),
+  1357→                ),
+  1358→              ]
+  1359→            : null,
+  1360→      ),
+  1361→      child: Card(
+  1362→        margin: EdgeInsets.zero,
+  1363→        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+  1364→        color: isSelected
+  1365→            ? Theme.of(context).colorScheme.primary.withOpacity(0.12)
+  1366→            : Theme.of(context).colorScheme.surface,
+  1367→        child: InkWell(
+  1368→          borderRadius: BorderRadius.circular(18),
+  1369→          onTap: () => _selectProvider(id),
+  1370→          child: Column(
+  1371→            mainAxisAlignment: MainAxisAlignment.center,
+  1372→            children: [
+  1373→              Icon(
+  1374→                icon,
+  1375→                size: 26,
+  1376→                color: isSelected
+  1377→                    ? Theme.of(context).colorScheme.primary
+  1378→                    : (isDark ? Colors.grey[400] : Colors.grey[600]),
+  1379→              ),
+  1380→              const SizedBox(height: 8),
+  1381→              Text(
+  1382→                label,
+  1383→                textAlign: TextAlign.center,
+  1384→                maxLines: 1,
+  1385→                overflow: TextOverflow.ellipsis,
+  1386→                style: TextStyle(
+  1387→                  fontSize: 11,
+  1388→                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+  1389→                  color: isSelected
+  1390→                      ? Theme.of(context).colorScheme.primary
+  1391→                      : (isDark ? Colors.grey[300] : Colors.grey[700]),
+  1392→                ),
+  1393→              ),
+  1394→            ],
+  1395→          ),
+  1396→        ),
+  1397→      ),
+  1398→    );
+  1399→  }
+  1400→
+  1401→  Widget _buildFormTextField({
+  1402→    required TextEditingController controller,
+  1403→    required String label,
+  1404→    required String hint,
+  1405→    bool obscure = false,
+  1406→    Widget? suffix,
+  1407→    required bool isDark,
+  1408→  }) {
+  1409→    return Container(
+  1410→      decoration: BoxDecoration(
+  1411→        color: Theme.of(context).colorScheme.surface,
+  1412→        borderRadius: BorderRadius.circular(18),
+  1413→        border: Border.all(
+  1414→          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.08),
+  1415→          width: 1.2,
+  1416→        ),
+  1417→        boxShadow: [
+  1418→          BoxShadow(
+  1419→            color: Colors.black.withOpacity(isDark ? 0.15 : 0.02),
+  1420→            blurRadius: 8,
+  1421→            offset: const Offset(0, 4),
+  1422→          ),
+  1423→        ],
+  1424→      ),
+  1425→      child: TextField(
+  1426→        controller: controller,
+  1427→        obscureText: obscure,
+  1428→        style: const TextStyle(fontSize: 14),
+  1429→        decoration: InputDecoration(
+  1430→          labelText: label,
+  1431→          labelStyle: TextStyle(
+  1432→            fontSize: 13,
+  1433→            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+  1434→          ),
+  1435→          hintText: hint,
+  1436→          hintStyle: TextStyle(
+  1437→            fontSize: 13,
+  1438→            color: isDark ? Colors.grey[700] : Colors.grey[400],
+  1439→          ),
+  1440→          contentPadding: const EdgeInsets.symmetric(
+  1441→            horizontal: 20,
+  1442→            vertical: 16,
+  1443→          ),
+  1444→          border: InputBorder.none,
+  1445→          suffixIcon: suffix,
+  1446→        ),
+  1447→      ),
+  1448→    );
+  1449→  }
+  1450→}
+  1451→

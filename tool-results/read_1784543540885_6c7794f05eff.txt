@@ -1,0 +1,1384 @@
+     1→import 'dart:async';
+     2→import 'dart:convert';
+     3→import 'dart:developer' as developer;
+     4→import 'dart:ui';
+     5→import 'package:flutter/material.dart';
+     6→import '../models/chat_message.dart';
+     7→import '../services/ai_service.dart';
+     8→import '../services/action_handler.dart';
+     9→import '../services/voice_service.dart';
+    10→import '../widgets/message_bubble.dart';
+    11→import '../services/telegram_service.dart';
+    12→import '../services/chat_history_service.dart';
+    13→import '../services/notification_service.dart';
+    14→import 'settings_screen.dart';
+    15→import 'task_history_screen.dart';
+    16→import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+    17→import '../main.dart';
+    18→import '../config/feature_flags.dart';
+    19→
+    20→class HomeScreen extends StatefulWidget {
+    21→  const HomeScreen({super.key});
+    22→
+    23→  @override
+    24→  State<HomeScreen> createState() => _HomeScreenState();
+    25→}
+    26→
+    27→class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+    28→  final TextEditingController _textController = TextEditingController();
+    29→  final ScrollController _scrollController = ScrollController();
+    30→  final AiService _aiService = AiService();
+    31→  final ActionHandler _actionHandler = ActionHandler();
+    32→  final VoiceService _voiceService = VoiceService();
+    33→  final NotificationService _notificationService = NotificationService();
+    34→  late final TelegramService _telegramService;
+    35→
+    36→  final List<ChatMessage> _messages = [];
+    37→  bool _isLoading = false;
+    38→  bool _isListening = false;
+    39→
+    40→  // Custom switch state: 'chat' or 'agent'
+    41→  String _mode = 'chat';
+    42→
+    43→  // Chat Session state tracking
+    44→  String _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
+    45→  String _sessionTitle = '';
+    46→
+    47→  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
+    48→  Timer? _overlayHistoryTimer;
+    49→
+    50→  @override
+    51→  void initState() {
+    52→    super.initState();
+    53→    WidgetsBinding.instance.addObserver(this);
+    54→    _telegramService = TelegramService(_actionHandler, _aiService);
+    55→    _initServices();
+    56→    _startOverlayHistorySync();
+    57→    // Register as the handler for overlay bubble tasks
+    58→    onOverlayTask = (task) => _sendMessage(task);
+    59→  }
+    60→
+    61→  Future<void> _initServices() async {
+    62→    await _aiService.init();
+    63→    await _notificationService.requestPermission();
+    64→    await _voiceService.init();
+    65→    await _telegramService.init();
+    66→    await _actionHandler.shizuku.checkAvailability();
+    67→
+    68→    if (mounted) {
+    69→      setState(() {});
+    70→    }
+    71→  }
+    72→
+    73→  Future<void> _saveSession() async {
+    74→    if (_messages.isEmpty) return;
+    75→
+    76→    // Set first user message as session title if not set
+    77→    if (_sessionTitle.isEmpty) {
+    78→      final firstUserMsg = _messages.firstWhere(
+    79→        (m) => m.isUser,
+    80→        orElse: () => ChatMessage(role: 'user', content: 'New Chat'),
+    81→      );
+    82→      _sessionTitle = firstUserMsg.content.length > 28
+    83→          ? '${firstUserMsg.content.substring(0, 25)}...'
+    84→          : firstUserMsg.content;
+    85→    }
+    86→
+    87→    final session = ChatSession(
+    88→      id: _sessionId,
+    89→      title: _sessionTitle,
+    90→      timestamp: DateTime.now(),
+    91→      messages: _messages.map((m) => m.toJson()).toList(),
+    92→    );
+    93→
+    94→    await ChatHistoryService.saveSession(session);
+    95→  }
+    96→
+    97→  Future<void> _sendMessage(String text) async {
+    98→    if (text.trim().isEmpty) return;
+    99→
+   100→    final userMessage = ChatMessage(role: 'user', content: text.trim());
+   101→    setState(() {
+   102→      _messages.add(userMessage);
+   103→      _isLoading = true;
+   104→    });
+   105→    _updateOverlayState();
+   106→    _textController.clear();
+   107→    _scrollToBottom();
+   108→    await _saveSession();
+   109→
+   110→    // Add empty placeholder assistant message for streaming
+   111→    final assistantMessage = ChatMessage(role: 'assistant', content: '');
+   112→    setState(() {
+   113→      _messages.add(assistantMessage);
+   114→    });
+   115→    final assistantIndex = _messages.length - 1;
+   116→
+   117→    try {
+   118→      final isAgent = _mode == 'agent';
+   119→      final stream = _aiService
+   120→          .sendMessageStream(text.trim(), isAgentMode: isAgent)
+   121→          .timeout(
+   122→            const Duration(seconds: 90),
+   123→            onTimeout: (sink) {
+   124→              sink.addError(
+   125→                TimeoutException(
+   126→                  'The model did not return visible text within 90 seconds.',
+   127→                ),
+   128→              );
+   129→              sink.close();
+   130→            },
+   131→          );
+   132→      String accumulated = '';
+   133→
+   134→      await for (final chunk in stream) {
+   135→        accumulated += chunk;
+   136→        if (mounted) {
+   137→          setState(() {
+   138→            _messages[assistantIndex] = ChatMessage(
+   139→              role: 'assistant',
+   140→              content: accumulated,
+   141→            );
+   142→          });
+   143→          _scrollToBottom();
+   144→        }
+   145→      }
+   146→      await _saveSession();
+   147→
+   148→      // Check if it's an action
+   149→      final action = _aiService.parseAction(accumulated);
+   150→
+   151→      if (action != null) {
+   152→        // If it's an action, we remove the raw JSON message from display
+   153→        setState(() {
+   154→          _messages.removeAt(assistantIndex);
+   155→        });
+   156→
+   157→        await _showTaskProgressOverlay('Starting: ${text.trim()}');
+   158→
+   159→        // Execute the action (pass aiService for multi-step tasks)
+   160→        final result = await _actionHandler.execute(
+   161→          action,
+   162→          aiService: _aiService,
+   163→          onProgress: (msg) {
+   164→            developer.log('Task progress: $msg', name: 'PrivateAgent');
+   165→            _sendOverlayEvent('OVERLAY_PROGRESS', msg);
+   166→            if (mounted) {
+   167→              setState(() {
+   168→                _messages.add(
+   169→                  ChatMessage(role: 'assistant', content: '⏳ $msg'),
+   170→                );
+   171→              });
+   172→              _scrollToBottom();
+   173→            }
+   174→          },
+   175→        );
+   176→
+   177→        setState(() {
+   178→          _messages.add(
+   179→            ChatMessage(
+   180→              role: 'assistant',
+   181→              content: result.success
+   182→                  ? (action.response.isNotEmpty
+   183→                        ? action.response
+   184→                        : (result.details ?? 'Done.'))
+   185→                  : (action.response.isNotEmpty
+   186→                        ? '${action.response}\n\n⚠️ ${result.details}'
+   187→                        : '⚠️ ${result.details}'),
+   188→              actionResult: result,
+   189→            ),
+   190→          );
+   191→        });
+   192→        _sendOverlayEvent(
+   193→          'OVERLAY_TASK_FINISHED',
+   194→          result.success
+   195→              ? (result.details ?? 'Task complete.')
+   196→              : 'Task failed: ${result.details ?? 'Unknown error'}',
+   197→        );
+   198→        if (action.action != 'execute_task') {
+   199→          await _notificationService.showTaskCompleteNotification(
+   200→            result.success ? 'Task Completed' : 'Task Failed',
+   201→            result.details ??
+   202→                (result.success
+   203→                    ? 'Agent finished its goal.'
+   204→                    : 'Agent could not complete the task.'),
+   205→          );
+   206→        }
+   207→        await _saveSession();
+   208→      } else {
+   209→        // Plain text response, we already rendered it, just speak it
+   210→        _voiceService.speak(accumulated);
+   211→      }
+   212→    } catch (e) {
+   213→      if (mounted) {
+   214→        setState(() {
+   215→          if (_messages.isNotEmpty && _messages.length > assistantIndex) {
+   216→            _messages.removeAt(assistantIndex);
+   217→          }
+   218→          _messages.add(
+   219→            ChatMessage(
+   220→              role: 'assistant',
+   221→              content: 'Error: ${e.toString().replaceFirst('Exception: ', '')}',
+   222→            ),
+   223→          );
+   224→        });
+   225→      }
+   226→    } finally {
+   227→      if (mounted) {
+   228→        setState(() {
+   229→          _isLoading = false;
+   230→        });
+   231→        _scrollToBottom();
+   232→        _updateOverlayState();
+   233→      }
+   234→    }
+   235→  }
+   236→
+   237→  Future<void> _showTaskProgressOverlay(String message) async {
+   238→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   239→    if (!await FlutterOverlayWindow.isPermissionGranted()) return;
+   240→
+   241→    // Never cover PrivateAgent itself. The lifecycle observer will create the
+   242→    // overlay after an automated action moves this app to the background.
+   243→    if (_appLifecycleState != AppLifecycleState.paused) return;
+   244→
+   245→    if (!await FlutterOverlayWindow.isActive()) {
+   246→      await FlutterOverlayWindow.showOverlay(
+   247→        enableDrag: true,
+   248→        overlayTitle: 'PrivateAgent',
+   249→        overlayContent: 'Performing task...',
+   250→        flag: OverlayFlag.focusPointer,
+   251→        alignment: OverlayAlignment.centerRight,
+   252→        visibility: NotificationVisibility.visibilitySecret,
+   253→        positionGravity: PositionGravity.auto,
+   254→        startPosition: const OverlayPosition(0, 200),
+   255→        width: 56,
+   256→        height: 56,
+   257→      );
+   258→      await Future<void>.delayed(const Duration(milliseconds: 300));
+   259→    }
+   260→
+   261→    // Keep the overlay minimized during automation. The user can still tap the
+   262→    // bubble to open the full conversation whenever they choose.
+   263→    _sendOverlayEvent('OVERLAY_TASK_STARTED', message);
+   264→  }
+   265→
+   266→  void _sendOverlayEvent(String type, String message) {
+   267→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   268→    final safeMessage = message.replaceAll('|', ' ');
+   269→    unawaited(
+   270→      FlutterOverlayWindow.shareData(
+   271→        '$type|$safeMessage',
+   272→      ).timeout(const Duration(seconds: 2)).catchError((Object _) {}),
+   273→    );
+   274→  }
+   275→
+   276→  Future<void> _sendOverlayHistorySnapshot() async {
+   277→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   278→    final history = base64Encode(
+   279→      utf8.encode(
+   280→        jsonEncode(_messages.map((message) => message.toJson()).toList()),
+   281→      ),
+   282→    );
+   283→    try {
+   284→      await FlutterOverlayWindow.shareData(
+   285→        'OVERLAY_HISTORY|$history',
+   286→      ).timeout(const Duration(seconds: 2));
+   287→    } catch (_) {}
+   288→  }
+   289→
+   290→  void _scrollToBottom() {
+   291→    WidgetsBinding.instance.addPostFrameCallback((_) {
+   292→      if (_scrollController.hasClients) {
+   293→        _scrollController.animateTo(
+   294→          _scrollController.position.maxScrollExtent,
+   295→          duration: const Duration(milliseconds: 300),
+   296→          curve: Curves.easeOut,
+   297→        );
+   298→      }
+   299→    });
+   300→  }
+   301→
+   302→  Future<void> _toggleVoice() async {
+   303→    if (_isListening) {
+   304→      await _voiceService.stopListening();
+   305→      setState(() => _isListening = false);
+   306→      return;
+   307→    }
+   308→
+   309→    setState(() => _isListening = true);
+   310→
+   311→    await _voiceService.startListening(
+   312→      onResult: (text) {
+   313→        _sendMessage(text);
+   314→      },
+   315→      onDone: () {
+   316→        if (mounted) {
+   317→          setState(() => _isListening = false);
+   318→        }
+   319→      },
+   320→    );
+   321→  }
+   322→
+   323→  void _startNewChat() {
+   324→    setState(() {
+   325→      _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
+   326→      _sessionTitle = '';
+   327→      _messages.clear();
+   328→      _aiService.clearHistory();
+   329→    });
+   330→  }
+   331→
+   332→  void _loadChatSession(ChatSession session) {
+   333→    setState(() {
+   334→      _sessionId = session.id;
+   335→      _sessionTitle = session.title;
+   336→      _messages.clear();
+   337→      for (final m in session.messages) {
+   338→        _messages.add(ChatMessage.fromJson(m));
+   339→      }
+   340→
+   341→      _aiService.clearHistory();
+   342→      for (final m in _messages) {
+   343→        if (m.actionResult != null) continue;
+   344→        _aiService.addHistoryMessage(m.role, m.content);
+   345→      }
+   346→    });
+   347→    _scrollToBottom();
+   348→  }
+   349→
+   350→  @override
+   351→  void dispose() {
+   352→    WidgetsBinding.instance.removeObserver(this);
+   353→    _overlayHistoryTimer?.cancel();
+   354→    _textController.dispose();
+   355→    _scrollController.dispose();
+   356→    _voiceService.dispose();
+   357→    _telegramService.dispose();
+   358→    super.dispose();
+   359→  }
+   360→
+   361→  @override
+   362→  void didChangeAppLifecycleState(AppLifecycleState state) {
+   363→    setState(() {
+   364→      _appLifecycleState = state;
+   365→    });
+   366→    if (state == AppLifecycleState.resumed) {
+   367→      _startOverlayHistorySync();
+   368→      unawaited(_handleAppForegrounded());
+   369→    } else {
+   370→      _overlayHistoryTimer?.cancel();
+   371→      _updateOverlayState();
+   372→    }
+   373→  }
+   374→
+   375→  void _startOverlayHistorySync() {
+   376→    _overlayHistoryTimer?.cancel();
+   377→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   378→    unawaited(_importOverlayChatHistory());
+   379→    _overlayHistoryTimer = Timer.periodic(const Duration(milliseconds: 500), (
+   380→      _,
+   381→    ) {
+   382→      if (_appLifecycleState == AppLifecycleState.resumed) {
+   383→        unawaited(_importOverlayChatHistory());
+   384→      }
+   385→    });
+   386→  }
+   387→
+   388→  Future<void> _handleAppForegrounded() async {
+   389→    await _updateOverlayState();
+   390→    await _importOverlayChatHistory();
+   391→  }
+   392→
+   393→  Future<void> _importOverlayChatHistory() async {
+   394→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   395→    if (_importingOverlayHistory) return;
+   396→    _importingOverlayHistory = true;
+   397→    try {
+   398→      final handoff = await ChatHistoryService.consumeOverlayMessages();
+   399→      if (!mounted || handoff.isEmpty) return;
+   400→
+   401→      final imported = handoff.map(ChatMessage.fromJson).toList();
+   402→      for (final message in imported) {
+   403→        if (message.actionResult == null) {
+   404→          _aiService.addHistoryMessage(message.role, message.content);
+   405→        }
+   406→      }
+   407→      setState(() {
+   408→        _messages.addAll(imported);
+   409→      });
+   410→      _scrollToBottom();
+   411→      await _saveSession();
+   412→    } finally {
+   413→      _importingOverlayHistory = false;
+   414→    }
+   415→  }
+   416→
+   417→  int _overlayUpdateGeneration = 0;
+   418→  bool _importingOverlayHistory = false;
+   419→
+   420→  Future<void> _updateOverlayState() async {
+   421→    if (!FeatureFlags.floatingOverlayEnabled) return;
+   422→    final generation = ++_overlayUpdateGeneration;
+   423→    final isBackground = _appLifecycleState == AppLifecycleState.paused;
+   424→    final shouldBeActive = isBackground;
+   425→
+   426→    bool granted = await FlutterOverlayWindow.isPermissionGranted();
+   427→    if (!granted || generation != _overlayUpdateGeneration) return;
+   428→
+   429→    bool active = await FlutterOverlayWindow.isActive();
+   430→    if (generation != _overlayUpdateGeneration) return;
+   431→    if (shouldBeActive && !active) {
+   432→      await Future.delayed(const Duration(milliseconds: 200));
+   433→      if (generation != _overlayUpdateGeneration) return;
+   434→      if (_appLifecycleState != AppLifecycleState.paused) return;
+   435→      if (await FlutterOverlayWindow.isActive()) return;
+   436→      await FlutterOverlayWindow.showOverlay(
+   437→        enableDrag: true,
+   438→        overlayTitle: "PrivateAgent",
+   439→        overlayContent: _isLoading
+   440→            ? "Performing task..."
+   441→            : "Floating Assistant",
+   442→        flag: OverlayFlag.focusPointer,
+   443→        alignment: OverlayAlignment.centerRight,
+   444→        visibility: NotificationVisibility.visibilitySecret,
+   445→        positionGravity: PositionGravity.auto,
+   446→        startPosition: const OverlayPosition(0, 200),
+   447→        width: 56,
+   448→        height: 56,
+   449→      );
+   450→      if (_isLoading && _appLifecycleState == AppLifecycleState.paused) {
+   451→        // Give the overlay isolate time to attach its listener, then send the
+   452→        // full active conversation. A second snapshot makes cold starts
+   453→        // reliable without duplicating messages because the overlay replaces
+   454→        // its list atomically.
+   455→        await Future<void>.delayed(const Duration(milliseconds: 250));
+   456→        await _sendOverlayHistorySnapshot();
+   457→        await Future<void>.delayed(const Duration(milliseconds: 250));
+   458→        if (_isLoading && _appLifecycleState == AppLifecycleState.paused) {
+   459→          await _sendOverlayHistorySnapshot();
+   460→        }
+   461→      }
+   462→    } else if (shouldBeActive && active && _isLoading) {
+   463→      await _sendOverlayHistorySnapshot();
+   464→    } else if (!shouldBeActive && active) {
+   465→      try {
+   466→        await FlutterOverlayWindow.shareData(
+   467→          'OVERLAY_RESET|',
+   468→        ).timeout(const Duration(milliseconds: 150));
+   469→      } catch (_) {}
+   470→      await Future<void>.delayed(const Duration(milliseconds: 50));
+   471→      if (generation != _overlayUpdateGeneration) return;
+   472→      if (_appLifecycleState == AppLifecycleState.paused) return;
+   473→      await FlutterOverlayWindow.closeOverlay();
+   474→    }
+   475→  }
+   476→
+   477→  @override
+   478→  Widget build(BuildContext context) {
+   479→    final isDark = Theme.of(context).brightness == Brightness.dark;
+   480→
+   481→    return Scaffold(
+   482→      backgroundColor: isDark
+   483→          ? const Color(0xFF0C0A15)
+   484→          : const Color(0xFFFFFFFF),
+   485→      appBar: AppBar(
+   486→        title: RichText(
+   487→          text: TextSpan(
+   488→            style: TextStyle(
+   489→              fontSize: 20,
+   490→              color: isDark ? Colors.white : const Color(0xFF1E293B),
+   491→            ),
+   492→            children: [
+   493→              TextSpan(
+   494→                text: 'Private',
+   495→                style: TextStyle(
+   496→                  fontWeight: FontWeight.w900,
+   497→                  color: Theme.of(context).colorScheme.primary,
+   498→                  letterSpacing: -0.5,
+   499→                ),
+   500→              ),
+   501→              const TextSpan(
+   502→                text: 'Agent',
+   503→                style: TextStyle(
+   504→                  fontWeight: FontWeight.w400,
+   505→                  letterSpacing: -0.5,
+   506→                ),
+   507→              ),
+   508→            ],
+   509→          ),
+   510→        ),
+   511→        backgroundColor: Colors.transparent,
+   512→        scrolledUnderElevation: 0,
+   513→        leading: Builder(
+   514→          builder: (context) => IconButton(
+   515→            icon: const Icon(Icons.menu_rounded),
+   516→            tooltip: 'Menu',
+   517→            onPressed: () => Scaffold.of(context).openDrawer(),
+   518→          ),
+   519→        ),
+   520→        actions: [
+   521→          IconButton(
+   522→            icon: const Icon(Icons.add_comment_outlined),
+   523→            tooltip: 'New chat',
+   524→            onPressed: _isLoading ? null : _startNewChat,
+   525→          ),
+   526→          // Settings Action
+   527→          IconButton(
+   528→            icon: const Icon(Icons.settings_rounded),
+   529→            onPressed: () async {
+   530→              await Navigator.push(
+   531→                context,
+   532→                MaterialPageRoute(
+   533→                  builder: (_) => SettingsScreen(
+   534→                    aiService: _aiService,
+   535→                    shizukuService: _actionHandler.shizuku,
+   536→                    screenAutomationService: _actionHandler.screenAutomation,
+   537→                    telegramService: _telegramService,
+   538→                  ),
+   539→                ),
+   540→              );
+   541→              await _actionHandler.shizuku.checkAvailability();
+   542→              if (mounted) setState(() {});
+   543→            },
+   544→          ),
+   545→        ],
+   546→      ),
+   547→      drawer: _buildDrawer(context, isDark),
+   548→      body: Stack(
+   549→        children: [
+   550→          // Background mesh glows
+   551→          _buildBackgroundGlows(isDark),
+   552→
+   553→          Positioned.fill(
+   554→            child: BackdropFilter(
+   555→              filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
+   556→              child: Container(color: Colors.transparent),
+   557→            ),
+   558→          ),
+   559→
+   560→          Column(
+   561→            children: [
+   562→              // Pill selector switcher
+   563→              _buildModeSelector(isDark),
+   564→
+   565→              // API key warning banner
+   566→              if (!_aiService.isConfigured)
+   567→                Container(
+   568→                  margin: const EdgeInsets.symmetric(
+   569→                    horizontal: 16,
+   570→                    vertical: 8,
+   571→                  ),
+   572→                  padding: const EdgeInsets.symmetric(
+   573→                    horizontal: 16,
+   574→                    vertical: 10,
+   575→                  ),
+   576→                  decoration: BoxDecoration(
+   577→                    color: Colors.orangeAccent.withOpacity(0.15),
+   578→                    borderRadius: BorderRadius.circular(16),
+   579→                    border: Border.all(
+   580→                      color: Colors.orangeAccent.withOpacity(0.3),
+   581→                    ),
+   582→                  ),
+   583→                  child: Row(
+   584→                    children: [
+   585→                      const Icon(
+   586→                        Icons.warning_amber_rounded,
+   587→                        color: Colors.orange,
+   588→                      ),
+   589→                      const SizedBox(width: 12),
+   590→                      const Expanded(
+   591→                        child: Text(
+   592→                          'API not configured. Tap Settings to add details.',
+   593→                          style: TextStyle(
+   594→                            fontSize: 12.5,
+   595→                            fontWeight: FontWeight.w600,
+   596→                          ),
+   597→                        ),
+   598→                      ),
+   599→                      TextButton(
+   600→                        onPressed: () async {
+   601→                          await Navigator.push(
+   602→                            context,
+   603→                            MaterialPageRoute(
+   604→                              builder: (_) => SettingsScreen(
+   605→                                aiService: _aiService,
+   606→                                shizukuService: _actionHandler.shizuku,
+   607→                                screenAutomationService:
+   608→                                    _actionHandler.screenAutomation,
+   609→                                telegramService: _telegramService,
+   610→                              ),
+   611→                            ),
+   612→                          );
+   613→                          if (mounted) setState(() {});
+   614→                        },
+   615→                        child: const Text('Configure'),
+   616→                      ),
+   617→                    ],
+   618→                  ),
+   619→                ),
+   620→
+   621→              // Chat content area
+   622→              Expanded(
+   623→                child: _messages.isEmpty
+   624→                    ? _buildEmptyState(isDark)
+   625→                    : ListView.builder(
+   626→                        controller: _scrollController,
+   627→                        physics: const BouncingScrollPhysics(),
+   628→                        padding: const EdgeInsets.symmetric(
+   629→                          horizontal: 16,
+   630→                          vertical: 8,
+   631→                        ),
+   632→                        itemCount: _messages.length,
+   633→                        itemBuilder: (context, index) {
+   634→                          return MessageBubble(message: _messages[index]);
+   635→                        },
+   636→                      ),
+   637→              ),
+   638→
+   639→              // Think loading indicator
+   640→              if (_isLoading)
+   641→                Padding(
+   642→                  padding: const EdgeInsets.symmetric(
+   643→                    horizontal: 24,
+   644→                    vertical: 8,
+   645→                  ),
+   646→                  child: Row(
+   647→                    mainAxisAlignment: MainAxisAlignment.start,
+   648→                    children: [
+   649→                      const SizedBox(
+   650→                        width: 14,
+   651→                        height: 14,
+   652→                        child: CircularProgressIndicator(
+   653→                          strokeWidth: 2,
+   654→                          valueColor: AlwaysStoppedAnimation<Color>(
+   655→                            Colors.indigoAccent,
+   656→                          ),
+   657→                        ),
+   658→                      ),
+   659→                      const SizedBox(width: 10),
+   660→                      Text(
+   661→                        'Thinking...',
+   662→                        style: TextStyle(
+   663→                          fontSize: 12,
+   664→                          color: isDark
+   665→                              ? const Color(0xFF9E9BAC)
+   666→                              : const Color(0xFF6C6A7C),
+   667→                          fontWeight: FontWeight.w500,
+   668→                        ),
+   669→                      ),
+   670→                      const SizedBox(width: 8),
+   671→                      TextButton.icon(
+   672→                        onPressed: () {
+   673→                          _actionHandler.cancelTask();
+   674→                          setState(() {
+   675→                            _isLoading = false;
+   676→                          });
+   677→                        },
+   678→                        icon: const Icon(
+   679→                          Icons.stop_circle_rounded,
+   680→                          size: 16,
+   681→                          color: Colors.redAccent,
+   682→                        ),
+   683→                        label: const Text(
+   684→                          'Stop',
+   685→                          style: TextStyle(
+   686→                            color: Colors.redAccent,
+   687→                            fontSize: 12,
+   688→                            fontWeight: FontWeight.bold,
+   689→                          ),
+   690→                        ),
+   691→                        style: TextButton.styleFrom(
+   692→                          padding: const EdgeInsets.symmetric(horizontal: 8),
+   693→                          minimumSize: Size.zero,
+   694→                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+   695→                        ),
+   696→                      ),
+   697→                    ],
+   698→                  ),
+   699→                ),
+   700→
+   701→              // Custom Input bar
+   702→              _buildInputBar(isDark),
+   703→            ],
+   704→          ),
+   705→        ],
+   706→      ),
+   707→    );
+   708→  }
+   709→
+   710→  Widget _buildDrawer(BuildContext context, bool isDark) {
+   711→    final drawerBg = isDark ? const Color(0xFF0B0F19) : const Color(0xFFF8FAFC);
+   712→    final textStyle = TextStyle(
+   713→      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+   714→      fontWeight: FontWeight.w600,
+   715→      fontSize: 13.5,
+   716→    );
+   717→    final headerStyle = TextStyle(
+   718→      color: isDark ? Colors.white : const Color(0xFF1E293B),
+   719→      fontSize: 17,
+   720→      fontWeight: FontWeight.w900,
+   721→      letterSpacing: -0.5,
+   722→    );
+   723→
+   724→    return Drawer(
+   725→      backgroundColor: drawerBg,
+   726→      child: Column(
+   727→        children: [
+   728→          // Drawer Header
+   729→          Container(
+   730→            padding: const EdgeInsets.only(
+   731→              top: 60,
+   732→              bottom: 20,
+   733→              left: 24,
+   734→              right: 24,
+   735→            ),
+   736→            alignment: Alignment.centerLeft,
+   737→            child: Row(
+   738→              children: [
+   739→                Icon(
+   740→                  Icons.smart_toy_rounded,
+   741→                  color: Theme.of(context).primaryColor,
+   742→                  size: 26,
+   743→                ),
+   744→                const SizedBox(width: 12),
+   745→                Text('PrivateAgent', style: headerStyle),
+   746→              ],
+   747→            ),
+   748→          ),
+   749→
+   750→          // New Chat Button
+   751→          Padding(
+   752→            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+   753→            child: Container(
+   754→              width: double.infinity,
+   755→              decoration: BoxDecoration(
+   756→                color: Theme.of(context).colorScheme.primary,
+   757→                borderRadius: BorderRadius.circular(16),
+   758→                boxShadow: [
+   759→                  BoxShadow(
+   760→                    color: Theme.of(
+   761→                      context,
+   762→                    ).colorScheme.primary.withOpacity(0.2),
+   763→                    blurRadius: 8,
+   764→                    offset: const Offset(0, 3),
+   765→                  ),
+   766→                ],
+   767→              ),
+   768→              child: Material(
+   769→                color: Colors.transparent,
+   770→                child: InkWell(
+   771→                  onTap: () {
+   772→                    Navigator.pop(context); // Close drawer
+   773→                    _startNewChat();
+   774→                  },
+   775→                  borderRadius: BorderRadius.circular(16),
+   776→                  child: const Padding(
+   777→                    padding: EdgeInsets.symmetric(vertical: 12),
+   778→                    child: Row(
+   779→                      mainAxisAlignment: MainAxisAlignment.center,
+   780→                      children: [
+   781→                        Icon(
+   782→                          Icons.add_comment_rounded,
+   783→                          color: Colors.white,
+   784→                          size: 16,
+   785→                        ),
+   786→                        const SizedBox(width: 8),
+   787→                        Text(
+   788→                          'New Chat',
+   789→                          style: TextStyle(
+   790→                            color: Colors.white,
+   791→                            fontWeight: FontWeight.bold,
+   792→                            fontSize: 13.5,
+   793→                          ),
+   794→                        ),
+   795→                      ],
+   796→                    ),
+   797→                  ),
+   798→                ),
+   799→              ),
+   800→            ),
+   801→          ),
+   802→
+   803→          const Divider(indent: 16, endIndent: 16, height: 20),
+   804→
+   805→          // Section CHAT HISTORY
+   806→          Padding(
+   807→            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+   808→            child: Align(
+   809→              alignment: Alignment.centerLeft,
+   810→              child: Text(
+   811→                'CHAT HISTORY',
+   812→                style: TextStyle(
+   813→                  fontSize: 10,
+   814→                  fontWeight: FontWeight.w800,
+   815→                  color: Theme.of(context).primaryColor,
+   816→                  letterSpacing: 1.5,
+   817→                ),
+   818→              ),
+   819→            ),
+   820→          ),
+   821→
+   822→          // Chat Sessions List
+   823→          Expanded(
+   824→            child: FutureBuilder<List<ChatSession>>(
+   825→              future: ChatHistoryService.loadSessions(),
+   826→              builder: (context, snapshot) {
+   827→                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+   828→                  return Center(
+   829→                    child: Text(
+   830→                      'No recent chats',
+   831→                      style: TextStyle(
+   832→                        color: isDark ? Colors.grey[800] : Colors.grey[400],
+   833→                        fontSize: 12,
+   834→                      ),
+   835→                    ),
+   836→                  );
+   837→                }
+   838→
+   839→                final sessions = snapshot.data!;
+   840→                return ListView.builder(
+   841→                  padding: const EdgeInsets.symmetric(horizontal: 8),
+   842→                  itemCount: sessions.length,
+   843→                  itemBuilder: (context, index) {
+   844→                    final session = sessions[index];
+   845→                    final isCurrent = session.id == _sessionId;
+   846→
+   847→                    return Container(
+   848→                      margin: const EdgeInsets.symmetric(
+   849→                        vertical: 2,
+   850→                        horizontal: 8,
+   851→                      ),
+   852→                      decoration: BoxDecoration(
+   853→                        color: isCurrent
+   854→                            ? Theme.of(
+   855→                                context,
+   856→                              ).colorScheme.primary.withOpacity(0.08)
+   857→                            : Colors.transparent,
+   858→                        borderRadius: BorderRadius.circular(12),
+   859→                        border: isCurrent
+   860→                            ? Border.all(
+   861→                                color: Theme.of(
+   862→                                  context,
+   863→                                ).colorScheme.primary.withOpacity(0.15),
+   864→                              )
+   865→                            : null,
+   866→                      ),
+   867→                      child: ListTile(
+   868→                        contentPadding: const EdgeInsets.symmetric(
+   869→                          horizontal: 12,
+   870→                          vertical: 0,
+   871→                        ),
+   872→                        dense: true,
+   873→                        leading: Icon(
+   874→                          Icons.chat_bubble_outline_rounded,
+   875→                          size: 15,
+   876→                          color: isCurrent
+   877→                              ? Theme.of(context).colorScheme.primary
+   878→                              : (isDark ? Colors.grey[600] : Colors.grey[500]),
+   879→                        ),
+   880→                        title: Text(
+   881→                          session.title,
+   882→                          maxLines: 1,
+   883→                          overflow: TextOverflow.ellipsis,
+   884→                          style: textStyle.copyWith(
+   885→                            fontWeight: isCurrent
+   886→                                ? FontWeight.bold
+   887→                                : FontWeight.w500,
+   888→                            color: isCurrent
+   889→                                ? (isDark
+   890→                                      ? Colors.white
+   891→                                      : const Color(0xFF1E293B))
+   892→                                : null,
+   893→                          ),
+   894→                        ),
+   895→                        trailing: IconButton(
+   896→                          icon: Icon(
+   897→                            Icons.delete_outline_rounded,
+   898→                            size: 16,
+   899→                            color: Colors.redAccent.withOpacity(0.7),
+   900→                          ),
+   901→                          onPressed: () async {
+   902→                            await ChatHistoryService.deleteSession(session.id);
+   903→                            if (isCurrent) {
+   904→                              _startNewChat();
+   905→                            }
+   906→                            (context as Element)
+   907→                                .markNeedsBuild(); // Re-trigger build refresh
+   908→                          },
+   909→                        ),
+   910→                        onTap: () {
+   911→                          Navigator.pop(context);
+   912→                          _loadChatSession(session);
+   913→                        },
+   914→                      ),
+   915→                    );
+   916→                  },
+   917→                );
+   918→              },
+   919→            ),
+   920→          ),
+   921→
+   922→          const Divider(indent: 16, endIndent: 16, height: 20),
+   923→
+   924→          // Section TASKS & SETTINGS
+   925→          ListTile(
+   926→            horizontalTitleGap: 8,
+   927→            leading: Icon(
+   928→              Icons.history_rounded,
+   929→              color: isDark ? Colors.grey[400] : Colors.grey[600],
+   930→              size: 20,
+   931→            ),
+   932→            title: Text('Task History', style: textStyle),
+   933→            onTap: () {
+   934→              Navigator.pop(context);
+   935→              Navigator.push(
+   936→                context,
+   937→                MaterialPageRoute(builder: (_) => const TaskHistoryScreen()),
+   938→              );
+   939→            },
+   940→          ),
+   941→          ListTile(
+   942→            horizontalTitleGap: 8,
+   943→            leading: Icon(
+   944→              Icons.settings_rounded,
+   945→              color: isDark ? Colors.grey[400] : Colors.grey[600],
+   946→              size: 20,
+   947→            ),
+   948→            title: Text('Settings', style: textStyle),
+   949→            onTap: () {
+   950→              Navigator.pop(context);
+   951→              Navigator.push(
+   952→                context,
+   953→                MaterialPageRoute(
+   954→                  builder: (_) => SettingsScreen(
+   955→                    aiService: _aiService,
+   956→                    shizukuService: _actionHandler.shizuku,
+   957→                    screenAutomationService: _actionHandler.screenAutomation,
+   958→                    telegramService: _telegramService,
+   959→                  ),
+   960→                ),
+   961→              );
+   962→            },
+   963→          ),
+   964→          const SizedBox(height: 20),
+   965→        ],
+   966→      ),
+   967→    );
+   968→  }
+   969→
+   970→  Widget _buildBackgroundGlows(bool isDark) {
+   971→    return Positioned.fill(
+   972→      child: Stack(
+   973→        children: [
+   974→          Positioned(
+   975→            top: -150,
+   976→            left: -50,
+   977→            child: Container(
+   978→              width: 400,
+   979→              height: 400,
+   980→              decoration: BoxDecoration(
+   981→                shape: BoxShape.circle,
+   982→                gradient: RadialGradient(
+   983→                  colors: [
+   984→                    isDark
+   985→                        ? const Color(0xFF6366F1).withOpacity(0.24)
+   986→                        : const Color(0xFF4F46E5).withOpacity(0.12),
+   987→                    isDark
+   988→                        ? const Color(0xFF6366F1).withOpacity(0)
+   989→                        : const Color(0xFF4F46E5).withOpacity(0),
+   990→                  ],
+   991→                ),
+   992→              ),
+   993→            ),
+   994→          ),
+   995→          Positioned(
+   996→            bottom: 50,
+   997→            right: -100,
+   998→            child: Container(
+   999→              width: 350,
+  1000→              height: 350,
+  1001→              decoration: BoxDecoration(
+  1002→                shape: BoxShape.circle,
+  1003→                gradient: RadialGradient(
+  1004→                  colors: [
+  1005→                    isDark
+  1006→                        ? const Color(0xFF38BDF8).withOpacity(0.18)
+  1007→                        : const Color(0xFF0EA5E9).withOpacity(0.09),
+  1008→                    isDark
+  1009→                        ? const Color(0xFF38BDF8).withOpacity(0)
+  1010→                        : const Color(0xFF0EA5E9).withOpacity(0),
+  1011→                  ],
+  1012→                ),
+  1013→              ),
+  1014→            ),
+  1015→          ),
+  1016→        ],
+  1017→      ),
+  1018→    );
+  1019→  }
+  1020→
+  1021→  Widget _buildModeSelector(bool isDark) {
+  1022→    final activeBg = isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0);
+  1023→
+  1024→    return Center(
+  1025→      child: Container(
+  1026→        margin: const EdgeInsets.symmetric(vertical: 12),
+  1027→        padding: const EdgeInsets.all(4),
+  1028→        decoration: BoxDecoration(
+  1029→          color: activeBg,
+  1030→          borderRadius: BorderRadius.circular(30),
+  1031→          border: Border.all(
+  1032→            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.06),
+  1033→          ),
+  1034→        ),
+  1035→        child: Row(
+  1036→          mainAxisSize: MainAxisSize.min,
+  1037→          children: [
+  1038→            _buildModeButton(
+  1039→              'chat',
+  1040→              'Chat',
+  1041→              Icons.chat_bubble_outline_rounded,
+  1042→              isDark,
+  1043→            ),
+  1044→            _buildModeButton(
+  1045→              'agent',
+  1046→              'Agent',
+  1047→              Icons.smart_toy_outlined,
+  1048→              isDark,
+  1049→            ),
+  1050→          ],
+  1051→        ),
+  1052→      ),
+  1053→    );
+  1054→  }
+  1055→
+  1056→  Widget _buildModeButton(
+  1057→    String modeId,
+  1058→    String label,
+  1059→    IconData icon,
+  1060→    bool isDark,
+  1061→  ) {
+  1062→    final isSelected = _mode == modeId;
+  1063→
+  1064→    return GestureDetector(
+  1065→      onTap: () {
+  1066→        setState(() {
+  1067→          _mode = modeId;
+  1068→        });
+  1069→      },
+  1070→      child: AnimatedContainer(
+  1071→        duration: const Duration(milliseconds: 300),
+  1072→        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+  1073→        decoration: BoxDecoration(
+  1074→          borderRadius: BorderRadius.circular(26),
+  1075→          color: isSelected
+  1076→              ? Theme.of(context).colorScheme.primary
+  1077→              : Colors.transparent,
+  1078→          boxShadow: isSelected
+  1079→              ? [
+  1080→                  BoxShadow(
+  1081→                    color: Theme.of(
+  1082→                      context,
+  1083→                    ).colorScheme.primary.withOpacity(0.20),
+  1084→                    blurRadius: 10,
+  1085→                    offset: const Offset(0, 4),
+  1086→                  ),
+  1087→                ]
+  1088→              : null,
+  1089→        ),
+  1090→        child: Row(
+  1091→          children: [
+  1092→            Icon(
+  1093→              icon,
+  1094→              size: 15,
+  1095→              color: isSelected
+  1096→                  ? Colors.white
+  1097→                  : (isDark
+  1098→                        ? const Color(0xFF94A3B8)
+  1099→                        : const Color(0xFF475569)),
+  1100→            ),
+  1101→            const SizedBox(width: 8),
+  1102→            Text(
+  1103→              label,
+  1104→              style: TextStyle(
+  1105→                color: isSelected
+  1106→                    ? Colors.white
+  1107→                    : (isDark
+  1108→                          ? const Color(0xFF94A3B8)
+  1109→                          : const Color(0xFF475569)),
+  1110→                fontWeight: FontWeight.bold,
+  1111→                fontSize: 13,
+  1112→              ),
+  1113→            ),
+  1114→          ],
+  1115→        ),
+  1116→      ),
+  1117→    );
+  1118→  }
+  1119→
+  1120→  Widget _buildEmptyState(bool isDark) {
+  1121→    final time = DateTime.now();
+  1122→    String timeGreeting = 'Hello';
+  1123→    if (time.hour >= 5 && time.hour < 12) {
+  1124→      timeGreeting = 'Hello, good morning.';
+  1125→    } else if (time.hour >= 12 && time.hour < 17) {
+  1126→      timeGreeting = 'Hello, good afternoon.';
+  1127→    } else if (time.hour >= 17 && time.hour < 22) {
+  1128→      timeGreeting = 'Hello, good evening.';
+  1129→    } else {
+  1130→      timeGreeting = 'Hello.';
+  1131→    }
+  1132→
+  1133→    final suggestions = _mode == 'chat'
+  1134→        ? [
+  1135→            'Write a professional email',
+  1136→            'Explain quantum computing simply',
+  1137→            'Brainstorm mobile app ideas',
+  1138→            'Write a poem about robots',
+  1139→          ]
+  1140→        : [
+  1141→            'Open YouTube and search for cats',
+  1142→            'Call Mom',
+  1143→            'Set volume to 80%',
+  1144→            'What\'s on my screen?',
+  1145→          ];
+  1146→
+  1147→    return SingleChildScrollView(
+  1148→      physics: const BouncingScrollPhysics(),
+  1149→      child: Padding(
+  1150→        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+  1151→        child: Column(
+  1152→          children: [
+  1153→            const SizedBox(height: 10),
+  1154→            Align(
+  1155→              alignment: Alignment.centerLeft,
+  1156→              child: Column(
+  1157→                crossAxisAlignment: CrossAxisAlignment.start,
+  1158→                children: [
+  1159→                  Text(
+  1160→                    timeGreeting,
+  1161→                    style: TextStyle(
+  1162→                      fontSize: 30,
+  1163→                      fontWeight: FontWeight.w300,
+  1164→                      color: isDark
+  1165→                          ? const Color(0xFF94A3B8)
+  1166→                          : const Color(0xFF64748B),
+  1167→                      letterSpacing: -1.5,
+  1168→                      height: 1.1,
+  1169→                    ),
+  1170→                  ),
+  1171→                  const SizedBox(height: 4),
+  1172→                  Text(
+  1173→                    'How can I help you?',
+  1174→                    style: TextStyle(
+  1175→                      fontSize: 30,
+  1176→                      fontWeight: FontWeight.w600,
+  1177→                      color: Theme.of(context).colorScheme.primary,
+  1178→                      letterSpacing: -1.5,
+  1179→                      height: 1.2,
+  1180→                    ),
+  1181→                  ),
+  1182→                ],
+  1183→              ),
+  1184→            ),
+  1185→            const SizedBox(height: 48),
+  1186→            Align(
+  1187→              alignment: Alignment.centerLeft,
+  1188→              child: Text(
+  1189→                'SUGGESTIONS',
+  1190→                style: TextStyle(
+  1191→                  fontSize: 11,
+  1192→                  fontWeight: FontWeight.w800,
+  1193→                  color: isDark
+  1194→                      ? const Color(0xFF94A3B8)
+  1195→                      : const Color(0xFF475569),
+  1196→                  letterSpacing: 1.5,
+  1197→                ),
+  1198→              ),
+  1199→            ),
+  1200→            const SizedBox(height: 16),
+  1201→            SizedBox(
+  1202→              height: 52,
+  1203→              child: ListView.builder(
+  1204→                scrollDirection: Axis.horizontal,
+  1205→                physics: const BouncingScrollPhysics(),
+  1206→                itemCount: suggestions.length,
+  1207→                itemBuilder: (context, index) {
+  1208→                  final suggestion = suggestions[index];
+  1209→                  return Container(
+  1210→                    margin: const EdgeInsets.only(right: 12),
+  1211→                    child: InkWell(
+  1212→                      onTap: () => _sendMessage(suggestion),
+  1213→                      borderRadius: BorderRadius.circular(16),
+  1214→                      child: Container(
+  1215→                        padding: const EdgeInsets.symmetric(
+  1216→                          horizontal: 20,
+  1217→                          vertical: 12,
+  1218→                        ),
+  1219→                        decoration: BoxDecoration(
+  1220→                          color: isDark
+  1221→                              ? const Color(0xFF151D30)
+  1222→                              : Colors.white,
+  1223→                          borderRadius: BorderRadius.circular(16),
+  1224→                          border: Border.all(
+  1225→                            color: isDark
+  1226→                                ? const Color(0xFF243049).withOpacity(0.4)
+  1227→                                : const Color(0xFFE2E8F0),
+  1228→                            width: 1.2,
+  1229→                          ),
+  1230→                          boxShadow: [
+  1231→                            BoxShadow(
+  1232→                              color: Colors.black.withOpacity(
+  1233→                                isDark ? 0.1 : 0.02,
+  1234→                              ),
+  1235→                              blurRadius: 8,
+  1236→                              offset: const Offset(0, 3),
+  1237→                            ),
+  1238→                          ],
+  1239→                        ),
+  1240→                        child: Center(
+  1241→                          child: Text(
+  1242→                            suggestion,
+  1243→                            style: TextStyle(
+  1244→                              fontSize: 12.5,
+  1245→                              fontWeight: FontWeight.w600,
+  1246→                              color: isDark
+  1247→                                  ? const Color(0xFFF8FAFC)
+  1248→                                  : const Color(0xFF1E293B),
+  1249→                            ),
+  1250→                          ),
+  1251→                        ),
+  1252→                      ),
+  1253→                    ),
+  1254→                  );
+  1255→                },
+  1256→              ),
+  1257→            ),
+  1258→          ],
+  1259→        ),
+  1260→      ),
+  1261→    );
+  1262→  }
+  1263→
+  1264→  Widget _buildInputBar(bool isDark) {
+  1265→    return Container(
+  1266→      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+  1267→      decoration: const BoxDecoration(color: Colors.transparent),
+  1268→      child: Row(
+  1269→        children: [
+  1270→          // Glowing Voice Mic button
+  1271→          AnimatedContainer(
+  1272→            duration: const Duration(milliseconds: 300),
+  1273→            decoration: BoxDecoration(
+  1274→              shape: BoxShape.circle,
+  1275→              color: _isListening
+  1276→                  ? Colors.redAccent
+  1277→                  : Theme.of(context).cardTheme.color,
+  1278→              border: Border.all(
+  1279→                color: _isListening
+  1280→                    ? Colors.redAccent
+  1281→                    : Theme.of(context).colorScheme.onSurface.withOpacity(0.08),
+  1282→                width: 1.2,
+  1283→              ),
+  1284→              boxShadow: [
+  1285→                BoxShadow(
+  1286→                  color: Colors.black.withOpacity(isDark ? 0.2 : 0.03),
+  1287→                  blurRadius: 8,
+  1288→                  offset: const Offset(0, 4),
+  1289→                ),
+  1290→                if (_isListening)
+  1291→                  BoxShadow(
+  1292→                    color: Colors.redAccent.withOpacity(0.4),
+  1293→                    blurRadius: 12,
+  1294→                    spreadRadius: 2,
+  1295→                  ),
+  1296→              ],
+  1297→            ),
+  1298→            child: IconButton(
+  1299→              icon: Icon(
+  1300→                _isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
+  1301→                color: _isListening
+  1302→                    ? Colors.white
+  1303→                    : Theme.of(context).colorScheme.primary,
+  1304→              ),
+  1305→              onPressed: _isLoading ? null : _toggleVoice,
+  1306→            ),
+  1307→          ),
+  1308→          const SizedBox(width: 10),
+  1309→
+  1310→          // Custom Text input container
+  1311→          Expanded(
+  1312→            child: Container(
+  1313→              decoration: BoxDecoration(
+  1314→                color: Theme.of(context).cardTheme.color,
+  1315→                borderRadius: BorderRadius.circular(24),
+  1316→                border: Border.all(
+  1317→                  color: Theme.of(
+  1318→                    context,
+  1319→                  ).colorScheme.onSurface.withOpacity(0.08),
+  1320→                  width: 1.2,
+  1321→                ),
+  1322→                boxShadow: [
+  1323→                  BoxShadow(
+  1324→                    color: Colors.black.withOpacity(isDark ? 0.2 : 0.03),
+  1325→                    blurRadius: 8,
+  1326→                    offset: const Offset(0, 4),
+  1327→                  ),
+  1328→                ],
+  1329→              ),
+  1330→              child: Row(
+  1331→                children: [
+  1332→                  Expanded(
+  1333→                    child: TextField(
+  1334→                      controller: _textController,
+  1335→                      style: const TextStyle(fontSize: 14),
+  1336→                      decoration: InputDecoration(
+  1337→                        hintText: _isListening
+  1338→                            ? 'Listening...'
+  1339→                            : 'Type a command...',
+  1340→                        hintStyle: TextStyle(
+  1341→                          fontSize: 13,
+  1342→                          color: isDark ? Colors.grey[600] : Colors.grey[400],
+  1343→                        ),
+  1344→                        contentPadding: const EdgeInsets.symmetric(
+  1345→                          horizontal: 20,
+  1346→                          vertical: 12,
+  1347→                        ),
+  1348→                        border: InputBorder.none,
+  1349→                      ),
+  1350→                      textInputAction: TextInputAction.send,
+  1351→                      onSubmitted: _isLoading
+  1352→                          ? null
+  1353→                          : (text) => _sendMessage(text),
+  1354→                    ),
+  1355→                  ),
+  1356→
+  1357→                  // Solid Send button
+  1358→                  Container(
+  1359→                    margin: const EdgeInsets.only(right: 6),
+  1360→                    decoration: BoxDecoration(
+  1361→                      shape: BoxShape.circle,
+  1362→                      color: Theme.of(context).colorScheme.primary,
+  1363→                    ),
+  1364→                    child: IconButton(
+  1365→                      icon: const Icon(
+  1366→                        Icons.send_rounded,
+  1367→                        size: 16,
+  1368→                        color: Colors.white,
+  1369→                      ),
+  1370→                      onPressed: _isLoading
+  1371→                          ? null
+  1372→                          : () => _sendMessage(_textController.text),
+  1373→                    ),
+  1374→                  ),
+  1375→                ],
+  1376→              ),
+  1377→            ),
+  1378→          ),
+  1379→        ],
+  1380→      ),
+  1381→    );
+  1382→  }
+  1383→}
+  1384→

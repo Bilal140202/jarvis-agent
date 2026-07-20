@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F0F1A"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- API Section -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AI Provider"
+            android:textColor="#6C63FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputApiKey"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="API Key"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#6C63FF"
+            android:inputType="textPassword"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputBaseUrl"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Base URL"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#6C63FF"
+            android:inputType="textUri"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <EditText
+                android:id="@+id/inputModel"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:hint="Model"
+                android:textColorHint="#808080"
+                android:textColor="#E0E0E0"
+                android:backgroundTint="#6C63FF"
+                android:inputType="text" />
+
+            <Button
+                android:id="@+id/btnFetchModels"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:text="Fetch"
+                android:backgroundTint="#2A2A4E"
+                android:textColor="#E0E0E0"
+                android:layout_marginStart="8dp" />
+        </LinearLayout>
+
+        <!-- Agent Settings -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Agent Behavior"
+            android:textColor="#6C63FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"
+            android:layout_marginTop="8dp" />
+
+        <TextView android:id="@+id/labelMaxSteps"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Max Steps: 25"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+        <SeekBar android:id="@+id/seekMaxSteps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="50"
+            android:progress="25"
+            android:layout_marginBottom="8dp" />
+
+        <TextView android:id="@+id/labelTemperature"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Temperature: 0.3"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+        <SeekBar android:id="@+id/seekTemperature"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="30"
+            android:layout_marginBottom="8dp" />
+
+        <TextView android:id="@+id/labelMaxTokens"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Max Tokens: 2048"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+        <SeekBar android:id="@+id/seekMaxTokens"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="8192"
+            android:progress="2048"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Toggles -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Features"
+            android:textColor="#6C63FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Switch android:id="@+id/switchCompression"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Screen Compression"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+
+        <Switch android:id="@+id/switchSkillMemory"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Skill Memory (Learn & Replay)"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+
+        <Switch android:id="@+id/switchConfirmDestructive"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Confirm Destructive Actions"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+
+        <Switch android:id="@+id/switchOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Floating Overlay"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="4dp" />
+
+        <Switch android:id="@+id/switchVoice"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Voice Responses"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Telegram -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Telegram Bot (Remote Control)"
+            android:textColor="#6C63FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Switch android:id="@+id/switchTelegram"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Enable Telegram Bot"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/inputTelegramToken"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="Bot Token"
+            android:textColorHint="#808080"
+            android:textColor="#E0E0E0"
+            android:backgroundTint="#6C63FF"
+            android:inputType="text"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Accessibility Status -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Accessibility Service"
+            android:textColor="#6C63FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <TextView android:id="@+id/labelA11yStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="✗ Not Active"
+            android:textColor="#FF6B6B"
+            android:layout_marginBottom="8dp" />
+
+        <Button
+            android:id="@+id/btnOpenA11y"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Open Accessibility Settings"
+            android:backgroundTint="#2A2A4E"
+            android:textColor="#E0E0E0"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Save -->
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="Save Settings"
+            android:backgroundTint="#6C63FF"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp" />
+
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,881 @@
+     1→import 'dart:async';
+     2→import 'dart:convert';
+     3→import 'dart:developer' as developer;
+     4→import 'ai_service.dart';
+     5→import 'screen_automation_service.dart';
+     6→import 'app_launcher_service.dart';
+     7→import 'notification_service.dart';
+     8→import 'task_history_logger.dart';
+     9→import 'shizuku_service.dart';
+    10→import 'skill_memory_service.dart';
+    11→import 'recovery_engine.dart';
+    12→import '../models/saved_skill.dart';
+    13→
+    14→/// Executes multi-step UI automation tasks using LLM-guided screen reading.
+    15→///
+    16→/// Flow: User gives high-level goal → LLM reads screen → decides next action →
+    17→/// executes → reads screen again → repeats until goal is complete.
+    18→class TaskExecutor {
+    19→  final AiService _aiService;
+    20→  final ScreenAutomationService _screenService;
+    21→  final AppLauncherService _appLauncher;
+    22→  final ShizukuService _shizukuService;
+    23→  final NotificationService _notificationService = NotificationService();
+    24→  final SkillMemoryService _skillMemory = SkillMemoryService();
+    25→  final RecoveryEngine _recoveryEngine = RecoveryEngine();
+    26→
+    27→  /// Callback to report progress messages to the UI
+    28→  final void Function(String message)? onProgress;
+    29→
+    30→  /// Set to true to cancel the running task
+    31→  bool _cancelled = false;
+    32→  Completer<void>? _cancelCompleter;
+    33→
+    34→  TaskExecutor({
+    35→    required AiService aiService,
+    36→    required ScreenAutomationService screenService,
+    37→    required AppLauncherService appLauncher,
+    38→    required ShizukuService shizukuService,
+    39→    this.onProgress,
+    40→  }) : _aiService = aiService,
+    41→       _screenService = screenService,
+    42→       _appLauncher = appLauncher,
+    43→       _shizukuService = shizukuService;
+    44→
+    45→  /// Cancel the currently running task — takes effect immediately
+    46→  void cancel() {
+    47→    _cancelled = true;
+    48→    if (_cancelCompleter != null && !_cancelCompleter!.isCompleted) {
+    49→      _cancelCompleter!.complete();
+    50→    }
+    51→  }
+    52→
+    53→  static const String _taskSystemPrompt = '''
+    54→You are a phone automation agent. You are given a TASK and the current SCREEN content.
+    55→You must decide what single action to take next to accomplish the task.
+    56→
+    57→Respond with ONLY a JSON object (no markdown, no code fences):
+    58→{
+    59→  "action": "action_name",
+    60→  "params": {"key": "value"},
+    61→  "reasoning": "why you chose this action",
+    62→  "is_complete": false
+    63→}
+    64→
+    65→Available actions:
+    66→- click_text: {"text": "exact text to click"} - Click an element by its visible text
+    67→- click_at: {"x": 540, "y": 960} - Click at screen coordinates (use bounds from screen dump)
+    68→- type_text: {"text": "hello", "field_hint": "optional hint"} - Type into the focused/first edit field
+    69→- press_enter: {} - Press the Enter/Search key on the keyboard to submit a search/form
+    70→- scroll: {"direction": "down"} - Scroll down/up on the current view
+    71→- swipe: {"startX": 540, "startY": 2000, "endX": 540, "endY": 500} - Swipe from start to end coordinates (e.g. open app drawer, navigate carousels)
+    72→- press_back: {} - Press the back button
+    73→- press_home: {} - Press the home button
+    74→- open_app: {"app_name": "WhatsApp"} - Open an app
+    75→- wait: {} - Wait a moment for content to load
+    76→- done: {} - Task is complete
+    77→
+    78→Rules:
+    79→- You will receive a TEXT DUMP of the accessibility tree containing exact text strings and center coordinates.
+    80→- ALWAYS use the text dump to decide your next action.
+    81→- If you need to click something, prefer using `click_text`. If the element does not have text, use `click_at` with the coordinates provided in the text dump.
+    82→- When typing in a search box, you MUST click it first, wait a step, and THEN type.
+    83→- After typing a search query, use `press_enter` once. If the screen does not change, click the exact visible suggestion text. Do not repeat the same submit action more than twice.
+    84→- Never scroll or swipe more than three times in a row. After three scrolls, choose the best visible result or take a different action instead of continuing to browse indefinitely.
+    85→- Set is_complete=true ONLY when the task is fully done.
+    86→- If you need to find something by scrolling, scroll and then check the screen again.
+    87→- If you need to open an app (like Wikipedia, Spotify, etc.) and you cannot find it after a couple of scrolls, ASSUME it is not installed. Immediately open Chrome or Google to search for the info on the web instead.
+    88→- If stuck after 3 attempts, set is_complete=true and explain in reasoning.
+    89→- Keep reasoning very brief (1 sentence)
+    90→''';
+    91→
+    92→  /// Extract JSON safely even if wrapped in markdown or conversational text
+    93→  String _extractJson(String text) {
+    94→    // 1. Try to find a markdown json code block
+    95→    final codeBlockRegex = RegExp(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```');
+    96→    final match = codeBlockRegex.firstMatch(text);
+    97→    if (match != null) {
+    98→      return match.group(1)!;
+    99→    }
+   100→
+   101→    // 2. Fallback: find the first { and the last }
+   102→    final startIndex = text.indexOf('{');
+   103→    final endIndex = text.lastIndexOf('}');
+   104→    if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
+   105→      return text.substring(startIndex, endIndex + 1);
+   106→    }
+   107→
+   108→    return text.trim();
+   109→  }
+   110→
+   111→  /// Execute a multi-step task with LLM guidance
+   112→  Future<String> executeTask(String userGoal) async {
+   113→    await ScreenAutomationService.logToNative(
+   114→      "[TaskExecutor] executeTask() CALLED with goal: $userGoal",
+   115→    );
+   116→    _cancelled = false;
+   117→
+   118→    await ScreenAutomationService.logToNative(
+   119→      "[TaskExecutor] Checking if accessibility service is running...",
+   120→    );
+   121→    final isRunning = await _screenService.isServiceRunning();
+   122→    await ScreenAutomationService.logToNative(
+   123→      "[TaskExecutor] Accessibility service isRunning = $isRunning",
+   124→    );
+   125→    if (!isRunning) {
+   126→      await ScreenAutomationService.logToNative(
+   127→        "[TaskExecutor] Accessibility service not running, returning early.",
+   128→      );
+   129→      return 'Accessibility service is not enabled. Go to Settings \u2192 Accessibility \u2192 PrivateAgent Screen Control and enable it.';
+   130→    }
+   131→
+   132→    final results = <String>[];
+   133→    results.add('Starting task: $userGoal');
+   134→    _report('Starting task: $userGoal');
+   135→
+   136→    // Check skill memory first
+   137→    final savedSkill = await _skillMemory.findSkill(userGoal);
+   138→    if (savedSkill != null && savedSkill.isReliable) {
+   139→      _report(
+   140→        'Found saved skill! Replaying ${savedSkill.steps.length} steps...',
+   141→      );
+   142→      final replaySuccess = await _replaySkill(savedSkill, results);
+   143→      if (replaySuccess) {
+   144→        results.add('Task complete via skill memory.');
+   145→        _report('Task complete (via skill memory).');
+   146→        await _notificationService.showTaskCompleteNotification(
+   147→          'Task Completed',
+   148→          'Agent finished its goal using memory.',
+   149→        );
+   150→        await TaskHistoryLogger.logTask(
+   151→          userGoal,
+   152→          'Success',
+   153→          0,
+   154→          savedSkill.steps.length,
+   155→          results,
+   156→        );
+   157→        await _screenService.showToast('Task Complete! (Memory)');
+   158→        return 'Done.';
+   159→      } else {
+   160→        _report('Replay failed, falling back to AI...');
+   161→        await _skillMemory.recordFailure(savedSkill.id);
+   162→      }
+   163→    }
+   164→
+   165→    // Smart pre-launch shortcuts: execute common sequences without LLM
+   166→    final shortcut = _getNavigationShortcut(userGoal);
+   167→    String lastAction = '';
+   168→    int sameActionCount = 0;
+   169→    int consecutiveFailures = 0;
+   170→    String lastFailedAction = '';
+   171→    int totalTokens = 0;
+   172→    final List<ActionStep> executedSteps = [];
+   173→
+   174→    if (shortcut != null && shortcut.isNotEmpty) {
+   175→      results.add('Using navigation shortcut: ${shortcut.length} steps');
+   176→      _report('Using navigation shortcut...');
+   177→      for (final step in shortcut) {
+   178→        if (_cancelled) break;
+   179→
+   180→        bool success = false;
+   181→        if (step.action == 'open_app') {
+   182→          final appName = step.params['app_name'] as String? ?? '';
+   183→          final res = await _appLauncher.openApp(appName);
+   184→          success = res.startsWith('Opened');
+   185→          await Future.delayed(const Duration(milliseconds: 3000));
+   186→        } else if (step.action == 'click_text') {
+   187→          final text = step.params['text'] as String? ?? '';
+   188→          success = await _screenService.clickByText(text);
+   189→          await Future.delayed(const Duration(milliseconds: 1500));
+   190→        }
+   191→
+   192→        if (success) {
+   193→          executedSteps.add(step);
+   194→          lastAction = step.action;
+   195→        } else {
+   196→          break; // Fall back to AI if shortcut step fails
+   197→        }
+   198→      }
+   199→    } else {
+   200→      // If no shortcut is used, and we are currently inside the PrivateAgent app,
+   201→      // press Home so the AI doesn't see its own chat bubbles and get confused by the task text.
+   202→      final currentPkg = await _screenService.getCurrentPackage();
+   203→      if (currentPkg == 'com.orailnoor.privateagent') {
+   204→        _report('Moving to background...');
+   205→        await _screenService.pressHome();
+   206→        await Future.delayed(const Duration(milliseconds: 1500));
+   207→      }
+   208→    }
+   209→
+   210→    for (int step = 0; step < _aiService.maxSteps; step++) {
+   211→      // Check for cancellation
+   212→      if (_cancelled) {
+   213→        results.add('Task cancelled by user.');
+   214→        _report('Task cancelled.');
+   215→        await _notificationService.showTaskCompleteNotification(
+   216→          'Task Cancelled',
+   217→          'Task was stopped by the user.',
+   218→        );
+   219→        await TaskHistoryLogger.logTask(
+   220→          userGoal,
+   221→          'Cancelled',
+   222→          totalTokens,
+   223→          step,
+   224→          results,
+   225→        );
+   226→        await _screenService.showToast('Task Cancelled');
+   227→        return 'Task cancelled.';
+   228→      }
+   229→
+   230→      // Adaptive delay: give Android apps time to transition screens, load data, or open keyboards
+   231→      int delay = 1200; // Default 1.2s delay for most actions
+   232→      if (lastAction == 'open_app') {
+   233→        delay = 3000; // Apps need ~3 seconds to fully cold-start and render
+   234→      } else if (lastAction == 'type_text') {
+   235→        delay =
+   236→            2000; // Typing involves keyboards and often triggers heavy network requests (search)
+   237→      } else if (lastAction == 'click_text' || lastAction == 'click_at') {
+   238→        delay = 1500; // Clicking usually triggers a screen transition
+   239→      } else if (lastAction == 'scroll') {
+   240→        delay = 1000; // Scrolling is relatively fast
+   241→      }
+   242→      await Future.delayed(Duration(milliseconds: delay));
+   243→
+   244→      // 1. Read the current screen text
+   245→      final screenContent = _aiService.useScreenCompression
+   246→          ? await _screenService.getCompressedScreenDescription(userGoal)
+   247→          : await _screenService.getScreenDescription();
+   248→      developer.log(
+   249→        '=== SCREEN DUMP (Step ${step + 1}) ===\n$screenContent',
+   250→        name: 'PrivateAgent',
+   251→      );
+   252→
+   253→      // Determine previous result string
+   254→      final prevResultStr = step > 0 && results.isNotEmpty
+   255→          ? '\nPREVIOUS ACTION RESULT: ${results.last}\n'
+   256→          : '';
+   257→
+   258→      // Build failure hint if agent is stuck in a loop
+   259→      String failureHint = '';
+   260→      if (consecutiveFailures >= 3) {
+   261→        failureHint =
+   262→            '\n\nWARNING: You have failed $consecutiveFailures times in a row with the same approach. You MUST try a completely different action. If open_app failed, try press_home and look for the app icon on the home screen instead. If click_text failed, use click_at with coordinates. Do NOT repeat the same failed action.';
+   263→      }
+   264→
+   265→      // 2. Build the prompt (system prompt is sent separately via sendTaskMessage)
+   266→      final prompt =
+   267→          '''TASK: $userGoal
+   268→
+   269→CURRENT SCREEN TEXT DUMP:
+   270→$screenContent$prevResultStr$failureHint
+   271→Step ${step + 1}/${_aiService.maxSteps}. Look at the text dump and coordinates. What is the next action?''';
+   272→
+   273→      developer.log('=== AI PROMPT ===\n$prompt', name: 'PrivateAgent');
+   274→
+   275→      // 3. Get AI response — races against cancel signal so Stop works immediately
+   276→      String response;
+   277→      try {
+   278→        _cancelCompleter = Completer<void>();
+   279→        final aiFuture = _aiService.sendTaskMessage(_taskSystemPrompt, prompt);
+   280→
+   281→        // Race: whichever finishes first wins
+   282→        final result = await Future.any([
+   283→          aiFuture.then((r) => r),
+   284→          _cancelCompleter!.future.then((_) => null),
+   285→        ]);
+   286→
+   287→        if (result == null || _cancelled) {
+   288→          results.add('Task cancelled by user.');
+   289→          _report('Task cancelled.');
+   290→          await _notificationService.showTaskCompleteNotification(
+   291→            'Task Cancelled',
+   292→            'Task was stopped by the user.',
+   293→          );
+   294→          await TaskHistoryLogger.logTask(
+   295→            userGoal,
+   296→            'Cancelled',
+   297→            totalTokens,
+   298→            step,
+   299→            results,
+   300→          );
+   301→          await _screenService.showToast('Task Cancelled');
+   302→          return 'Task cancelled.';
+   303→        }
+   304→
+   305→        final aiResponse = result as AiResponse;
+   306→        response = aiResponse.content;
+   307→        totalTokens += aiResponse.totalTokens;
+   308→
+   309→        developer.log(
+   310→          '=== RAW AI RESPONSE ===\n$response',
+   311→          name: 'PrivateAgent',
+   312→        );
+   313→      } catch (e) {
+   314→        if (_cancelled) {
+   315→          results.add('Task cancelled by user.');
+   316→          _report('Task cancelled.');
+   317→          await _notificationService.showTaskCompleteNotification(
+   318→            'Task Cancelled',
+   319→            'Task was stopped by the user.',
+   320→          );
+   321→          await TaskHistoryLogger.logTask(
+   322→            userGoal,
+   323→            'Cancelled',
+   324→            totalTokens,
+   325→            step,
+   326→            results,
+   327→          );
+   328→          await _screenService.showToast('Task Cancelled');
+   329→          await Future.delayed(const Duration(seconds: 2));
+   330→          return 'Task cancelled.';
+   331→        }
+   332→        results.add('AI error: $e');
+   333→        _report('Error: $e');
+   334→        await _notificationService.showTaskCompleteNotification(
+   335→          'Task Error',
+   336→          'AI encountered an error.',
+   337→        );
+   338→        await TaskHistoryLogger.logTask(
+   339→          userGoal,
+   340→          'Failed',
+   341→          totalTokens,
+   342→          step,
+   343→          results,
+   344→        );
+   345→        await _screenService.showToast('AI Error: $e');
+   346→        await Future.delayed(const Duration(seconds: 3));
+   347→        return 'I could not complete the task because the AI service failed.';
+   348→      }
+   349→
+   350→      // Check for cancellation after AI response
+   351→      if (_cancelled) {
+   352→        results.add('Task cancelled by user.');
+   353→        _report('Task cancelled.');
+   354→        await _notificationService.showTaskCompleteNotification(
+   355→          'Task Cancelled',
+   356→          'Task was stopped by the user.',
+   357→        );
+   358→        await TaskHistoryLogger.logTask(
+   359→          userGoal,
+   360→          'Cancelled',
+   361→          totalTokens,
+   362→          step,
+   363→          results,
+   364→        );
+   365→        await _screenService.showToast('Task Cancelled');
+   366→        await Future.delayed(const Duration(seconds: 2));
+   367→        return 'Task cancelled.';
+   368→      }
+   369→
+   370→      // 4. Parse the action (with one retry on failure)
+   371→      Map<String, dynamic>? actionJson;
+   372→      String? parsedJsonStr;
+   373→      try {
+   374→        String jsonStr = _extractJson(response);
+   375→
+   376→        actionJson = jsonDecode(jsonStr) as Map<String, dynamic>;
+   377→        parsedJsonStr = jsonStr;
+   378→      } catch (firstError) {
+   379→        // First attempt failed — retry once
+   380→        developer.log(
+   381→          '=== JSON PARSE FAILED, RETRYING ===\nError: $firstError\nRaw: $response',
+   382→          name: 'PrivateAgent',
+   383→        );
+   384→        _report('Retrying step ${step + 1}...\n(Failed to parse: $firstError)');
+   385→        // Wait 2 seconds before retrying to prevent rate-limit spam
+   386→        await Future.delayed(const Duration(seconds: 2));
+   387→        try {
+   388→          final retryResponse = await _aiService.sendTaskMessage(
+   389→            _taskSystemPrompt,
+   390→            prompt,
+   391→          );
+   392→          totalTokens += retryResponse.totalTokens;
+   393→          developer.log(
+   394→            '=== RETRY AI RESPONSE ===\n${retryResponse.content}',
+   395→            name: 'PrivateAgent',
+   396→          );
+   397→
+   398→          String jsonStr = _extractJson(retryResponse.content);
+   399→          actionJson = jsonDecode(jsonStr) as Map<String, dynamic>;
+   400→          parsedJsonStr = jsonStr;
+   401→        } catch (e) {
+   402→          results.add('Step ${step + 1}: Error after retry: $e');
+   403→
+   404→          String debugInfo = 'Error: $e';
+   405→          _report('AI Error: $debugInfo\n\nRaw output:\n${response}');
+   406→
+   407→          await _notificationService.showTaskCompleteNotification(
+   408→            'Task Error',
+   409→            'AI formatting error.',
+   410→          );
+   411→          await TaskHistoryLogger.logTask(
+   412→            userGoal,
+   413→            'Failed',
+   414→            totalTokens,
+   415→            step,
+   416→            results,
+   417→          );
+   418→          await _screenService.showToast('Agent Error: $e');
+   419→          await Future.delayed(const Duration(seconds: 3));
+   420→          return 'I could not understand the AI response. Please try again.';
+   421→        }
+   422→      }
+   423→
+   424→      final action = actionJson['action'] as String? ?? 'done';
+   425→      final params = actionJson['params'] as Map<String, dynamic>? ?? {};
+   426→      final reasoning = actionJson['reasoning'] as String? ?? '';
+   427→      final isComplete = actionJson['is_complete'] == true;
+   428→
+   429→      developer.log(
+   430→        '=== PARSED ACTION ===\nAction: $action\nParams: $params\nReasoning: $reasoning\nIs Complete: $isComplete',
+   431→        name: 'PrivateAgent',
+   432→      );
+   433→
+   434→      _report('Step ${step + 1}: $reasoning');
+   435→
+   436→      sameActionCount = action == lastAction ? sameActionCount + 1 : 1;
+   437→      final repeatLimit = action == 'press_enter'
+   438→          ? 2
+   439→          : (action == 'scroll' || action == 'swipe' ? 3 : 1000);
+   440→      if (sameActionCount > repeatLimit) {
+   441→        final blockedResult =
+   442→            'Blocked repeated $action action. Use a different action on the visible screen.';
+   443→        results.add(blockedResult);
+   444→        _report(blockedResult);
+   445→        consecutiveFailures = 3;
+   446→        lastFailedAction = action;
+   447→        lastAction = action;
+   448→        continue;
+   449→      }
+   450→      lastAction = action; // Track for adaptive delay
+   451→
+   452→      // 5. Execute the action
+   453→      bool success = false;
+   454→      String actionResult = '';
+   455→
+   456→      switch (action) {
+   457→        case 'click_text':
+   458→          final text = params['text'] as String? ?? '';
+   459→          success = await _screenService.clickByText(text);
+   460→          actionResult = success
+   461→              ? 'Clicked "$text"'
+   462→              : 'Could not find "$text" to click';
+   463→          break;
+   464→
+   465→        case 'click_at':
+   466→          final x = (params['x'] as num?)?.toDouble() ?? 0;
+   467→          final y = (params['y'] as num?)?.toDouble() ?? 0;
+   468→          success = await _screenService.clickAt(x, y);
+   469→          actionResult = success ? 'Clicked at ($x, $y)' : 'Click failed';
+   470→          break;
+   471→
+   472→        case 'type_text':
+   473→          final text = params['text'] as String? ?? '';
+   474→          final hint = params['field_hint'] as String?;
+   475→          success = await _screenService.typeText(text, fieldHint: hint);
+   476→          actionResult = success ? 'Typed "$text"' : 'Could not type text';
+   477→          break;
+   478→
+   479→        case 'press_enter':
+   480→          success = await _submitKeyboardAction();
+   481→          actionResult = success
+   482→              ? 'Submitted the focused search/form field'
+   483→              : 'Could not submit the focused field';
+   484→          break;
+   485→
+   486→        case 'swipe':
+   487→          final startX = (params['startX'] as num?)?.toDouble() ?? 540;
+   488→          final startY = (params['startY'] as num?)?.toDouble() ?? 2000;
+   489→          final endX = (params['endX'] as num?)?.toDouble() ?? 540;
+   490→          final endY = (params['endY'] as num?)?.toDouble() ?? 500;
+   491→
+   492→          success = await _performSwipe(startX, startY, endX, endY);
+   493→          actionResult = 'Swiped from ($startX,$startY) to ($endX,$endY)';
+   494→          break;
+   495→
+   496→        case 'scroll':
+   497→          final direction = params['direction'] as String? ?? 'down';
+   498→          success = await _performScroll(direction);
+   499→          actionResult = success
+   500→              ? 'Scrolled $direction'
+   501→              : 'Could not scroll $direction';
+   502→          break;
+   503→
+   504→        case 'press_back':
+   505→          success = await _screenService.pressBack();
+   506→          actionResult = 'Pressed back';
+   507→          break;
+   508→
+   509→        case 'press_home':
+   510→          success = await _screenService.pressHome();
+   511→          actionResult = 'Pressed home';
+   512→          break;
+   513→
+   514→        case 'open_app':
+   515→          final appName = params['app_name'] as String? ?? '';
+   516→          actionResult = await _appLauncher.openApp(appName);
+   517→          success = actionResult.startsWith('Opened');
+   518→          break;
+   519→
+   520→        case 'wait':
+   521→          await Future.delayed(const Duration(seconds: 1));
+   522→          actionResult = 'Waited';
+   523→          success = true;
+   524→          break;
+   525→
+   526→        case 'done':
+   527→          results.add('Task complete: $reasoning');
+   528→          _report('Task complete: $reasoning');
+   529→          await _notificationService.showTaskCompleteNotification(
+   530→            'Task Completed',
+   531→            reasoning.trim().isEmpty ? 'Agent finished its goal.' : reasoning,
+   532→          );
+   533→          await _screenService.showToast('Task completed');
+   534→          return reasoning.trim().isEmpty ? 'Done.' : reasoning.trim();
+   535→
+   536→        default:
+   537→          actionResult = 'Unknown action: $action';
+   538→      }
+   539→
+   540→      developer.log(
+   541→        '=== NATIVE EXECUTION RESULT ===\n$actionResult',
+   542→        name: 'PrivateAgent',
+   543→      );
+   544→
+   545→      // Track consecutive failures to detect stuck loops
+   546→      if (!success) {
+   547→        if (action == lastFailedAction) {
+   548→          consecutiveFailures++;
+   549→        } else {
+   550→          consecutiveFailures = 1;
+   551→          lastFailedAction = action;
+   552→        }
+   553→
+   554→        // If stuck for 5+ consecutive failures, give up on this task
+   555→        if (consecutiveFailures >= 5) {
+   556→          results.add(
+   557→            'Agent is stuck. Stopping task after $consecutiveFailures consecutive failures.',
+   558→          );
+   559→          _report('Agent stuck — stopping task.');
+   560→          await _notificationService.showTaskCompleteNotification(
+   561→            'Task Stuck',
+   562→            'Agent could not complete the task after repeated failures.',
+   563→          );
+   564→          await TaskHistoryLogger.logTask(
+   565→            userGoal,
+   566→            'Failed',
+   567→            totalTokens,
+   568→            step,
+   569→            results,
+   570→          );
+   571→          await _screenService.showToast('Agent stuck. Task stopped.');
+   572→          await Future.delayed(const Duration(seconds: 4));
+   573→          return 'I could not complete the task. Please try again.';
+   574→        }
+   575→
+   576→        final recovery = await _recoveryEngine.diagnose(action, screenContent);
+   577→        _report('Recovering: ${recovery.description}');
+   578→
+   579→        if (recovery.action == 'wait') {
+   580→          await Future.delayed(const Duration(seconds: 2));
+   581→        } else if (recovery.action == 'press_back') {
+   582→          await _screenService.pressBack();
+   583→        } else if (recovery.action == 'scroll') {
+   584→          final dir = recovery.params['direction'] ?? 'down';
+   585→          if (dir == 'down') {
+   586→            await _shizukuService.runCommand(
+   587→              'input swipe 540 1800 540 600 600',
+   588→            );
+   589→          } else {
+   590→            await _shizukuService.runCommand(
+   591→              'input swipe 540 600 540 1800 600',
+   592→            );
+   593→          }
+   594→        } else if (recovery.action == 'press_home') {
+   595→          await _screenService.pressHome();
+   596→        }
+   597→
+   598→        results.add('Recovery step: ${recovery.description}');
+   599→        continue;
+   600→      } else {
+   601→        consecutiveFailures = 0;
+   602→        lastFailedAction = '';
+   603→        executedSteps.add(ActionStep(action: action, params: params));
+   604→      }
+   605→
+   606→      results.add('Step ${step + 1}: $actionResult ($reasoning)');
+   607→
+   608→      // Provide progress feedback
+   609→      if (!isComplete && (step + 1) % 3 == 0) {
+   610→        await _screenService.showToast('Working... (Step ${step + 1})');
+   611→      }
+   612→
+   613→      if (isComplete) {
+   614→        results.add('Task complete.');
+   615→        _report('Task complete.');
+   616→        await _notificationService.showTaskCompleteNotification(
+   617→          'Task Completed',
+   618→          'Agent finished its goal.',
+   619→        );
+   620→        await TaskHistoryLogger.logTask(
+   621→          userGoal,
+   622→          'Success',
+   623→          totalTokens,
+   624→          step,
+   625→          results,
+   626→        );
+   627→
+   628→        // Save to skill memory
+   629→        await _skillMemory.saveSkill(userGoal, executedSteps);
+   630→
+   631→        await _screenService.showToast('Task Complete!');
+   632→        // Wait 4 seconds so the user can see the result before jumping back
+   633→        await Future.delayed(const Duration(seconds: 4));
+   634→        return reasoning.trim().isEmpty ? 'Done.' : reasoning.trim();
+   635→      }
+   636→    }
+   637→
+   638→    results.add(
+   639→      'Reached maximum steps (${_aiService.maxSteps}). Task may be incomplete.',
+   640→    );
+   641→    _report('Reached maximum steps.');
+   642→    await _notificationService.showTaskCompleteNotification(
+   643→      'Task Stopped',
+   644→      'Reached maximum steps (${_aiService.maxSteps}).',
+   645→    );
+   646→    await TaskHistoryLogger.logTask(
+   647→      userGoal,
+   648→      'Failed',
+   649→      totalTokens,
+   650→      _aiService.maxSteps,
+   651→      results,
+   652→    );
+   653→    await _screenService.showToast('Reached maximum steps.');
+   654→    await Future.delayed(const Duration(seconds: 4));
+   655→
+   656→    return 'I could not complete the task within the allowed steps.';
+   657→  }
+   658→
+   659→  void _report(String message) {
+   660→    onProgress?.call(message);
+   661→  }
+   662→
+   663→  Future<bool> _submitKeyboardAction() async {
+   664→    if (await _screenService.pressEnter()) return true;
+   665→
+   666→    final shizukuAvailable = await _shizukuService.checkAvailability();
+   667→    if (!shizukuAvailable) return false;
+   668→
+   669→    final result = await _shizukuService.runCommand('input keyevent 66');
+   670→    final normalized = result.toLowerCase();
+   671→    return !normalized.contains('not running') &&
+   672→        !normalized.contains('permission denied') &&
+   673→        !normalized.startsWith('error');
+   674→  }
+   675→
+   676→  Future<bool> _performScroll(String direction) async {
+   677→    if (await _screenService.scroll(direction)) return true;
+   678→
+   679→    final isDown = direction.toLowerCase() == 'down';
+   680→    return _performSwipe(540, isDown ? 1800 : 600, 540, isDown ? 600 : 1800);
+   681→  }
+   682→
+   683→  Future<bool> _performSwipe(
+   684→    double startX,
+   685→    double startY,
+   686→    double endX,
+   687→    double endY,
+   688→  ) async {
+   689→    if (await _screenService.swipe(startX, startY, endX, endY)) return true;
+   690→
+   691→    final shizukuAvailable = await _shizukuService.checkAvailability();
+   692→    if (!shizukuAvailable) return false;
+   693→
+   694→    final result = await _shizukuService.runCommand(
+   695→      'input swipe ${startX.toInt()} ${startY.toInt()} '
+   696→      '${endX.toInt()} ${endY.toInt()} 600',
+   697→    );
+   698→    final normalized = result.toLowerCase();
+   699→    return !normalized.contains('not running') &&
+   700→        !normalized.contains('permission denied') &&
+   701→        !normalized.startsWith('error');
+   702→  }
+   703→
+   704→  /// Replays a saved skill without using the LLM
+   705→  Future<bool> _replaySkill(SavedSkill skill, List<String> results) async {
+   706→    for (int i = 0; i < skill.steps.length; i++) {
+   707→      if (_cancelled) return false;
+   708→
+   709→      final step = skill.steps[i];
+   710→      _report('Replaying step ${i + 1}/${skill.steps.length}: ${step.action}');
+   711→
+   712→      // Delay before executing each step
+   713→      int delay = 1200;
+   714→      if (step.action == 'open_app')
+   715→        delay = 3000;
+   716→      else if (step.action == 'type_text')
+   717→        delay = 2000;
+   718→      else if (step.action == 'click_text' || step.action == 'click_at')
+   719→        delay = 1500;
+   720→      else if (step.action == 'scroll')
+   721→        delay = 1000;
+   722→
+   723→      await Future.delayed(Duration(milliseconds: delay));
+   724→
+   725→      bool success = false;
+   726→      String actionResult = '';
+   727→
+   728→      switch (step.action) {
+   729→        case 'click_text':
+   730→          final text = step.params['text'] as String? ?? '';
+   731→          success = await _screenService.clickByText(text);
+   732→          actionResult = success
+   733→              ? 'Clicked "$text"'
+   734→              : 'Could not find "$text" to click';
+   735→          break;
+   736→        case 'click_at':
+   737→          final x = (step.params['x'] as num?)?.toDouble() ?? 0;
+   738→          final y = (step.params['y'] as num?)?.toDouble() ?? 0;
+   739→          success = await _screenService.clickAt(x, y);
+   740→          actionResult = success ? 'Clicked at ($x, $y)' : 'Click failed';
+   741→          break;
+   742→        case 'type_text':
+   743→          final text = step.params['text'] as String? ?? '';
+   744→          final hint = step.params['field_hint'] as String?;
+   745→          success = await _screenService.typeText(text, fieldHint: hint);
+   746→          actionResult = success ? 'Typed "$text"' : 'Could not type text';
+   747→          break;
+   748→        case 'press_enter':
+   749→          success = await _submitKeyboardAction();
+   750→          actionResult = success
+   751→              ? 'Submitted the focused search/form field'
+   752→              : 'Could not submit the focused field';
+   753→          break;
+   754→        case 'swipe':
+   755→          final startX = (step.params['startX'] as num?)?.toDouble() ?? 540;
+   756→          final startY = (step.params['startY'] as num?)?.toDouble() ?? 2000;
+   757→          final endX = (step.params['endX'] as num?)?.toDouble() ?? 540;
+   758→          final endY = (step.params['endY'] as num?)?.toDouble() ?? 500;
+   759→          success = await _performSwipe(startX, startY, endX, endY);
+   760→          actionResult = 'Swiped from ($startX,$startY) to ($endX,$endY)';
+   761→          break;
+   762→        case 'scroll':
+   763→          final direction = step.params['direction'] as String? ?? 'down';
+   764→          success = await _performScroll(direction);
+   765→          actionResult = success
+   766→              ? 'Scrolled $direction'
+   767→              : 'Could not scroll $direction';
+   768→          break;
+   769→        case 'press_back':
+   770→          success = await _screenService.pressBack();
+   771→          actionResult = 'Pressed back';
+   772→          break;
+   773→        case 'press_home':
+   774→          success = await _screenService.pressHome();
+   775→          actionResult = 'Pressed home';
+   776→          break;
+   777→        case 'open_app':
+   778→          final appName = step.params['app_name'] as String? ?? '';
+   779→          actionResult = await _appLauncher.openApp(appName);
+   780→          success = actionResult.startsWith('Opened');
+   781→          break;
+   782→        case 'wait':
+   783→          await Future.delayed(const Duration(seconds: 1));
+   784→          actionResult = 'Waited';
+   785→          success = true;
+   786→          break;
+   787→        case 'done':
+   788→          success = true;
+   789→          actionResult = 'Done step reached';
+   790→          break;
+   791→        default:
+   792→          success = false;
+   793→          actionResult = 'Unknown action: ${step.action}';
+   794→      }
+   795→
+   796→      results.add('Memory Replay Step ${i + 1}: $actionResult');
+   797→      developer.log(
+   798→        '=== MEMORY REPLAY RESULT ===\n$actionResult',
+   799→        name: 'PrivateAgent',
+   800→      );
+   801→
+   802→      if (!success) {
+   803→        return false; // Break out of replay if a step fails
+   804→      }
+   805→    }
+   806→
+   807→    return true; // All steps succeeded
+   808→  }
+   809→
+   810→  /// Returns predefined navigation steps for common tasks
+   811→  List<ActionStep>? _getNavigationShortcut(String goal) {
+   812→    final lower = goal.toLowerCase();
+   813→
+   814→    if (lower.contains('dark mode') || lower.contains('dark theme')) {
+   815→      return [
+   816→        ActionStep(action: 'open_app', params: {'app_name': 'Settings'}),
+   817→        ActionStep(action: 'click_text', params: {'text': 'Display'}),
+   818→      ];
+   819→    }
+   820→    if (lower.contains('wifi') || lower.contains('wi-fi')) {
+   821→      return [
+   822→        ActionStep(action: 'open_app', params: {'app_name': 'Settings'}),
+   823→        ActionStep(
+   824→          action: 'click_text',
+   825→          params: {'text': 'Network & internet'},
+   826→        ),
+   827→      ];
+   828→    }
+   829→    if (lower.contains('bluetooth')) {
+   830→      return [
+   831→        ActionStep(action: 'open_app', params: {'app_name': 'Settings'}),
+   832→        ActionStep(action: 'click_text', params: {'text': 'Connected devices'}),
+   833→      ];
+   834→    }
+   835→
+   836→    final appPatterns = <String, List<String>>{
+   837→      'Settings': ['settings', 'brightness', 'display', 'notification'],
+   838→      'Play Store': [
+   839→        'play store',
+   840→        'playstore',
+   841→        'download',
+   842→        'install app',
+   843→        'google play',
+   844→      ],
+   845→      'YouTube': ['youtube'],
+   846→      'WhatsApp': ['whatsapp'],
+   847→      'Chrome': ['chrome', 'browse', 'search google'],
+   848→      'Camera': ['camera', 'take a photo', 'take photo', 'take a picture'],
+   849→      'Gallery': ['gallery', 'photos'],
+   850→      'Messages': ['message', 'sms', 'text to'],
+   851→      'Phone': ['call', 'dial'],
+   852→      'Gmail': ['gmail', 'email'],
+   853→      'Maps': ['maps', 'navigate to', 'directions'],
+   854→      'Clock': ['alarm', 'timer', 'stopwatch'],
+   855→      'Calculator': ['calculator', 'calculate', 'calc'],
+   856→    };
+   857→
+   858→    for (final entry in appPatterns.entries) {
+   859→      for (final keyword in entry.value) {
+   860→        if (lower.contains(keyword)) {
+   861→          return [
+   862→            ActionStep(action: 'open_app', params: {'app_name': entry.key}),
+   863→          ];
+   864→        }
+   865→      }
+   866→    }
+   867→
+   868→    // Generic fallback for "open X"
+   869→    final openMatch = RegExp(r'^open\s+([a-zA-Z0-9]+)').firstMatch(lower);
+   870→    if (openMatch != null) {
+   871→      String app = openMatch.group(1)!;
+   872→      app = app[0].toUpperCase() + app.substring(1);
+   873→      return [
+   874→        ActionStep(action: 'open_app', params: {'app_name': app}),
+   875→      ];
+   876→    }
+   877→
+   878→    return null;
+   879→  }
+   880→}
+   881→

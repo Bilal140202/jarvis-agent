@@ -1,0 +1,1099 @@
+     1→import 'package:flutter/material.dart';
+     2→import 'package:permission_handler/permission_handler.dart';
+     3→import 'package:shared_preferences/shared_preferences.dart';
+     4→import '../main.dart';
+     5→import '../services/ai_service.dart';
+     6→import '../services/shizuku_service.dart';
+     7→import '../services/screen_automation_service.dart';
+     8→import '../services/telegram_service.dart';
+     9→import 'task_history_screen.dart';
+    10→import 'package:url_launcher/url_launcher.dart';
+    11→import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+    12→import '../config/feature_flags.dart';
+    13→
+    14→class SettingsScreen extends StatefulWidget {
+    15→  final AiService aiService;
+    16→  final ShizukuService shizukuService;
+    17→  final ScreenAutomationService screenAutomationService;
+    18→  final TelegramService telegramService;
+    19→
+    20→  const SettingsScreen({
+    21→    super.key,
+    22→    required this.aiService,
+    23→    required this.shizukuService,
+    24→    required this.screenAutomationService,
+    25→    required this.telegramService,
+    26→  });
+    27→
+    28→  @override
+    29→  State<SettingsScreen> createState() => _SettingsScreenState();
+    30→}
+    31→
+    32→class _SettingsScreenState extends State<SettingsScreen>
+    33→    with WidgetsBindingObserver {
+    34→  late TextEditingController _apiKeyController;
+    35→  late TextEditingController _baseUrlController;
+    36→  late TextEditingController _modelController;
+    37→  late TextEditingController _telegramTokenController;
+    38→  bool _obscureKey = true;
+    39→  bool _telegramEnabled = false;
+    40→  double _maxSteps = 15;
+    41→  bool _disableMaxSteps = false;
+    42→  late TextEditingController _maxTokensController;
+    43→  double _temperature = 1.0;
+    44→  bool _useScreenCompression = true;
+    45→  bool _useSystemPrompt = true;
+    46→  bool _floatingIconEnabled = false;
+    47→  bool _isOverlayPermissionGranted = false;
+    48→
+    49→  final Map<String, PermissionStatus> _permissions = {};
+    50→
+    51→  @override
+    52→  void initState() {
+    53→    super.initState();
+    54→    WidgetsBinding.instance.addObserver(this);
+    55→    _apiKeyController = TextEditingController(text: widget.aiService.apiKey);
+    56→    _baseUrlController = TextEditingController(text: widget.aiService.baseUrl);
+    57→    _modelController = TextEditingController(text: widget.aiService.model);
+    58→    _telegramTokenController = TextEditingController(
+    59→      text: widget.telegramService.botToken,
+    60→    );
+    61→    _telegramEnabled = widget.telegramService.isEnabled;
+    62→    _maxSteps = widget.aiService.rawMaxSteps.toDouble();
+    63→    _disableMaxSteps = widget.aiService.disableMaxSteps;
+    64→    _temperature = widget.aiService.temperature;
+    65→    _maxTokensController = TextEditingController(
+    66→      text: widget.aiService.maxTokens.toString(),
+    67→    );
+    68→    _useScreenCompression = widget.aiService.useScreenCompression;
+    69→    _useSystemPrompt = widget.aiService.useSystemPrompt;
+    70→
+    71→    // Auto-save listeners
+    72→    _apiKeyController.addListener(_autoSave);
+    73→    _baseUrlController.addListener(_autoSave);
+    74→    _modelController.addListener(_autoSave);
+    75→    _telegramTokenController.addListener(_autoSave);
+    76→    _maxTokensController.addListener(_autoSave);
+    77→
+    78→    _checkPermissions();
+    79→    if (FeatureFlags.floatingOverlayEnabled) {
+    80→      _checkOverlayStatus();
+    81→    }
+    82→  }
+    83→
+    84→  Future<void> _checkOverlayStatus() async {
+    85→    bool isActive = await FlutterOverlayWindow.isActive();
+    86→    bool isGranted = await FlutterOverlayWindow.isPermissionGranted();
+    87→    if (mounted) {
+    88→      setState(() {
+    89→        _floatingIconEnabled = isActive;
+    90→        _isOverlayPermissionGranted = isGranted;
+    91→      });
+    92→    }
+    93→  }
+    94→
+    95→  @override
+    96→  void dispose() {
+    97→    WidgetsBinding.instance.removeObserver(this);
+    98→    _apiKeyController.removeListener(_autoSave);
+    99→    _baseUrlController.removeListener(_autoSave);
+   100→    _modelController.removeListener(_autoSave);
+   101→    _telegramTokenController.removeListener(_autoSave);
+   102→    _maxTokensController.removeListener(_autoSave);
+   103→    _apiKeyController.dispose();
+   104→    _baseUrlController.dispose();
+   105→    _modelController.dispose();
+   106→    _telegramTokenController.dispose();
+   107→    _maxTokensController.dispose();
+   108→    super.dispose();
+   109→  }
+   110→
+   111→  @override
+   112→  void didChangeAppLifecycleState(AppLifecycleState state) {
+   113→    if (state == AppLifecycleState.resumed) {
+   114→      _checkPermissions();
+   115→      if (FeatureFlags.floatingOverlayEnabled) {
+   116→        _checkOverlayStatus();
+   117→      }
+   118→    }
+   119→  }
+   120→
+   121→  Future<void> _checkPermissions() async {
+   122→    final perms = {
+   123→      'Microphone': Permission.microphone,
+   124→      'Contacts': Permission.contacts,
+   125→      'Phone': Permission.phone,
+   126→      'SMS': Permission.sms,
+   127→      'Notifications': Permission.notification,
+   128→    };
+   129→
+   130→    for (final entry in perms.entries) {
+   131→      _permissions[entry.key] = await entry.value.status;
+   132→    }
+   133→    final overlayGranted = FeatureFlags.floatingOverlayEnabled
+   134→        ? await FlutterOverlayWindow.isPermissionGranted()
+   135→        : false;
+   136→    if (mounted) {
+   137→      setState(() {
+   138→        _isOverlayPermissionGranted = overlayGranted;
+   139→      });
+   140→    }
+   141→  }
+   142→
+   143→  Future<void> _requestPermission(String name, Permission permission) async {
+   144→    final status = await permission.request();
+   145→    setState(() => _permissions[name] = status);
+   146→  }
+   147→
+   148→  void _autoSave() {
+   149→    widget.aiService.saveSettings(
+   150→      apiKey: _apiKeyController.text.trim(),
+   151→      baseUrl: _baseUrlController.text.trim(),
+   152→      model: _modelController.text.trim(),
+   153→    );
+   154→
+   155→    widget.telegramService.saveSettings(
+   156→      botToken: _telegramTokenController.text.trim(),
+   157→      isEnabled: _telegramEnabled,
+   158→    );
+   159→
+   160→    widget.aiService.saveMaxSteps(_maxSteps.toInt());
+   161→    widget.aiService.saveDisableMaxSteps(_disableMaxSteps);
+   162→    widget.aiService.saveAdvancedSettings(
+   163→      temperature: _temperature,
+   164→      maxTokens: int.tryParse(_maxTokensController.text) ?? 1024,
+   165→      useScreenCompression: _useScreenCompression,
+   166→      useSystemPrompt: _useSystemPrompt,
+   167→    );
+   168→  }
+   169→
+   170→  Future<void> _fetchModels() async {
+   171→    final baseUrl = _baseUrlController.text.trim();
+   172→    final apiKey = _apiKeyController.text.trim();
+   173→
+   174→    if (baseUrl.isEmpty || apiKey.isEmpty) {
+   175→      ScaffoldMessenger.of(context).showSnackBar(
+   176→        const SnackBar(
+   177→          content: Text('Please enter Base URL and API Key first.'),
+   178→        ),
+   179→      );
+   180→      return;
+   181→    }
+   182→
+   183→    // Show loading
+   184→    showDialog(
+   185→      context: context,
+   186→      barrierDismissible: false,
+   187→      builder: (context) => const Center(child: CircularProgressIndicator()),
+   188→    );
+   189→
+   190→    final models = await widget.aiService.fetchAvailableModels(baseUrl, apiKey);
+   191→
+   192→    // Hide loading
+   193→    if (mounted) Navigator.pop(context);
+   194→
+   195→    if (models.isEmpty) {
+   196→      if (mounted) {
+   197→        ScaffoldMessenger.of(context).showSnackBar(
+   198→          const SnackBar(
+   199→            content: Text('No models found or error fetching models.'),
+   200→          ),
+   201→        );
+   202→      }
+   203→      return;
+   204→    }
+   205→
+   206→    if (mounted) {
+   207→      final isNvidia = AiService.isNvidiaBaseUrl(baseUrl);
+   208→      showDialog(
+   209→        context: context,
+   210→        builder: (context) => AlertDialog(
+   211→          title: Text(
+   212→            isNvidia ? 'Select a Free NVIDIA Model' : 'Select a Model',
+   213→          ),
+   214→          content: SizedBox(
+   215→            width: double.maxFinite,
+   216→            height: 300,
+   217→            child: ListView.builder(
+   218→              itemCount: models.length,
+   219→              itemBuilder: (context, index) {
+   220→                return ListTile(
+   221→                  title: Text(models[index]),
+   222→                  onTap: () {
+   223→                    setState(() {
+   224→                      _modelController.text = models[index];
+   225→                    });
+   226→                    Navigator.pop(context);
+   227→                  },
+   228→                );
+   229→              },
+   230→            ),
+   231→          ),
+   232→          actions: [
+   233→            TextButton(
+   234→              onPressed: () => Navigator.pop(context),
+   235→              child: const Text('Cancel'),
+   236→            ),
+   237→          ],
+   238→        ),
+   239→      );
+   240→    }
+   241→  }
+   242→
+   243→  Widget _buildSettingsCard({
+   244→    required IconData icon,
+   245→    required String title,
+   246→    String? subtitle,
+   247→    required List<Widget> children,
+   248→    required bool isDark,
+   249→  }) {
+   250→    return Card(
+   251→      margin: const EdgeInsets.only(bottom: 20),
+   252→      child: Padding(
+   253→        padding: const EdgeInsets.all(20),
+   254→        child: Column(
+   255→          crossAxisAlignment: CrossAxisAlignment.start,
+   256→          children: [
+   257→            Row(
+   258→              children: [
+   259→                Container(
+   260→                  padding: const EdgeInsets.all(8),
+   261→                  decoration: BoxDecoration(
+   262→                    color: Theme.of(context).primaryColor.withOpacity(0.12),
+   263→                    borderRadius: BorderRadius.circular(10),
+   264→                  ),
+   265→                  child: Icon(
+   266→                    icon,
+   267→                    color: Theme.of(context).primaryColor,
+   268→                    size: 20,
+   269→                  ),
+   270→                ),
+   271→                const SizedBox(width: 12),
+   272→                Expanded(
+   273→                  child: Column(
+   274→                    crossAxisAlignment: CrossAxisAlignment.start,
+   275→                    children: [
+   276→                      Text(
+   277→                        title,
+   278→                        style: const TextStyle(
+   279→                          fontSize: 16,
+   280→                          fontWeight: FontWeight.bold,
+   281→                        ),
+   282→                      ),
+   283→                      if (subtitle != null) ...[
+   284→                        const SizedBox(height: 2),
+   285→                        Text(
+   286→                          subtitle,
+   287→                          style: TextStyle(
+   288→                            fontSize: 12,
+   289→                            color: isDark
+   290→                                ? const Color(0xFF94A3B8)
+   291→                                : const Color(0xFF475569),
+   292→                          ),
+   293→                        ),
+   294→                      ],
+   295→                    ],
+   296→                  ),
+   297→                ),
+   298→              ],
+   299→            ),
+   300→            const SizedBox(height: 20),
+   301→            ...children,
+   302→          ],
+   303→        ),
+   304→      ),
+   305→    );
+   306→  }
+   307→
+   308→  InputDecoration _buildInputDecoration({
+   309→    required String labelText,
+   310→    required String hintText,
+   311→    Widget? prefixIcon,
+   312→    Widget? suffixIcon,
+   313→  }) {
+   314→    final isDark = Theme.of(context).brightness == Brightness.dark;
+   315→    return InputDecoration(
+   316→      labelText: labelText,
+   317→      hintText: hintText,
+   318→      prefixIcon: prefixIcon,
+   319→      suffixIcon: suffixIcon,
+   320→      filled: true,
+   321→      fillColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+   322→      labelStyle: TextStyle(
+   323→        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+   324→        fontSize: 13,
+   325→        fontWeight: FontWeight.w600,
+   326→      ),
+   327→      hintStyle: TextStyle(
+   328→        color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+   329→        fontSize: 13,
+   330→      ),
+   331→      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+   332→      border: OutlineInputBorder(
+   333→        borderRadius: BorderRadius.circular(12),
+   334→        borderSide: BorderSide(
+   335→          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+   336→          width: 1.2,
+   337→        ),
+   338→      ),
+   339→      enabledBorder: OutlineInputBorder(
+   340→        borderRadius: BorderRadius.circular(12),
+   341→        borderSide: BorderSide(
+   342→          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+   343→          width: 1.2,
+   344→        ),
+   345→      ),
+   346→      focusedBorder: OutlineInputBorder(
+   347→        borderRadius: BorderRadius.circular(12),
+   348→        borderSide: BorderSide(
+   349→          color: Theme.of(context).colorScheme.primary,
+   350→          width: 1.8,
+   351→        ),
+   352→      ),
+   353→      floatingLabelBehavior: FloatingLabelBehavior.auto,
+   354→    );
+   355→  }
+   356→
+   357→  @override
+   358→  Widget build(BuildContext context) {
+   359→    final isDark = Theme.of(context).brightness == Brightness.dark;
+   360→    return Scaffold(
+   361→      appBar: AppBar(
+   362→        title: const Text(
+   363→          'Settings',
+   364→          style: TextStyle(fontWeight: FontWeight.bold),
+   365→        ),
+   366→      ),
+   367→      body: ListView(
+   368→        padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+   369→        children: [
+   370→          // 1. Appearance Card
+   371→          _buildSettingsCard(
+   372→            icon: Icons.palette_outlined,
+   373→            title: 'Appearance',
+   374→            subtitle: 'Choose your preferred color theme',
+   375→            isDark: isDark,
+   376→            children: [
+   377→              ValueListenableBuilder<ThemeMode>(
+   378→                valueListenable: themeNotifier,
+   379→                builder: (context, currentMode, _) {
+   380→                  return SizedBox(
+   381→                    width: double.infinity,
+   382→                    child: SegmentedButton<ThemeMode>(
+   383→                      style: SegmentedButton.styleFrom(
+   384→                        selectedBackgroundColor: Theme.of(
+   385→                          context,
+   386→                        ).colorScheme.primary,
+   387→                        selectedForegroundColor: Colors.white,
+   388→                        backgroundColor: isDark
+   389→                            ? const Color(0xFF1E293B)
+   390→                            : Colors.white,
+   391→                        foregroundColor: isDark ? Colors.white : Colors.black87,
+   392→                        side: BorderSide(
+   393→                          color: isDark
+   394→                              ? const Color(0xFF334155)
+   395→                              : const Color(0xFFE2E8F0),
+   396→                        ),
+   397→                      ),
+   398→                      segments: [
+   399→                        ButtonSegment(
+   400→                          value: ThemeMode.system,
+   401→                          label: const Text(
+   402→                            'System',
+   403→                            style: TextStyle(
+   404→                              fontWeight: FontWeight.bold,
+   405→                              fontSize: 12,
+   406→                            ),
+   407→                          ),
+   408→                          icon: const Icon(Icons.brightness_auto, size: 16),
+   409→                        ),
+   410→                        ButtonSegment(
+   411→                          value: ThemeMode.light,
+   412→                          label: const Text(
+   413→                            'Light',
+   414→                            style: TextStyle(
+   415→                              fontWeight: FontWeight.bold,
+   416→                              fontSize: 12,
+   417→                            ),
+   418→                          ),
+   419→                          icon: const Icon(Icons.light_mode, size: 16),
+   420→                        ),
+   421→                        ButtonSegment(
+   422→                          value: ThemeMode.dark,
+   423→                          label: const Text(
+   424→                            'Dark',
+   425→                            style: TextStyle(
+   426→                              fontWeight: FontWeight.bold,
+   427→                              fontSize: 12,
+   428→                            ),
+   429→                          ),
+   430→                          icon: const Icon(Icons.dark_mode, size: 16),
+   431→                        ),
+   432→                      ],
+   433→                      selected: {currentMode},
+   434→                      onSelectionChanged: (Set<ThemeMode> newSelection) async {
+   435→                        final mode = newSelection.first;
+   436→                        themeNotifier.value = mode;
+   437→                        final prefs = await SharedPreferences.getInstance();
+   438→                        await prefs.setString('themeMode', mode.name);
+   439→                      },
+   440→                    ),
+   441→                  );
+   442→                },
+   443→              ),
+   444→            ],
+   445→          ),
+   446→
+   447→          // 2. AI Engine Config Card
+   448→          _buildSettingsCard(
+   449→            icon: Icons.psychology_outlined,
+   450→            title: 'AI Engine Configuration',
+   451→            subtitle: 'Supports any OpenAI-compatible API endpoint',
+   452→            isDark: isDark,
+   453→            children: [
+   454→              TextField(
+   455→                controller: _apiKeyController,
+   456→                decoration: _buildInputDecoration(
+   457→                  labelText: 'API Key',
+   458→                  hintText: 'sk-...',
+   459→                  prefixIcon: const Icon(Icons.key_rounded, size: 18),
+   460→                  suffixIcon: IconButton(
+   461→                    icon: Icon(
+   462→                      _obscureKey ? Icons.visibility_off : Icons.visibility,
+   463→                      size: 18,
+   464→                    ),
+   465→                    onPressed: () => setState(() => _obscureKey = !_obscureKey),
+   466→                  ),
+   467→                ),
+   468→                obscureText: _obscureKey,
+   469→              ),
+   470→              const SizedBox(height: 12),
+   471→              TextField(
+   472→                controller: _baseUrlController,
+   473→                decoration: _buildInputDecoration(
+   474→                  labelText: 'API Base URL',
+   475→                  hintText: 'https://api.deepseek.com',
+   476→                  prefixIcon: const Icon(Icons.dns_rounded, size: 18),
+   477→                ),
+   478→              ),
+   479→              const SizedBox(height: 10),
+   480→              Wrap(
+   481→                spacing: 8,
+   482→                runSpacing: 4,
+   483→                children: [
+   484→                  ActionChip(
+   485→                    label: const Text(
+   486→                      'Local Server',
+   487→                      style: TextStyle(fontSize: 11),
+   488→                    ),
+   489→                    tooltip: 'For local Llama.cpp or LM Studio',
+   490→                    onPressed: () =>
+   491→                        _baseUrlController.text = 'http://192.168.1.X:8080/v1',
+   492→                  ),
+   493→                  ActionChip(
+   494→                    label: const Text(
+   495→                      'Ollama Cloud',
+   496→                      style: TextStyle(fontSize: 11),
+   497→                    ),
+   498→                    onPressed: () {
+   499→                      _baseUrlController.text = 'https://ollama.com/v1';
+   500→                      _modelController.text = 'gemma3:4b';
+   501→                    },
+   502→                  ),
+   503→                  ActionChip(
+   504→                    label: const Text(
+   505→                      'DeepSeek',
+   506→                      style: TextStyle(fontSize: 11),
+   507→                    ),
+   508→                    onPressed: () =>
+   509→                        _baseUrlController.text = 'https://api.deepseek.com',
+   510→                  ),
+   511→                  ActionChip(
+   512→                    label: const Text('Groq', style: TextStyle(fontSize: 11)),
+   513→                    onPressed: () => _baseUrlController.text =
+   514→                        'https://api.groq.com/openai/v1',
+   515→                  ),
+   516→                  ActionChip(
+   517→                    avatar: const Icon(Icons.memory_rounded, size: 16),
+   518→                    label: const Text('NVIDIA', style: TextStyle(fontSize: 11)),
+   519→                    tooltip: 'NVIDIA NIM free endpoints',
+   520→                    onPressed: () {
+   521→                      _baseUrlController.text = AiService.nvidiaBaseUrl;
+   522→                      _modelController.text = AiService.nvidiaDefaultModel;
+   523→                    },
+   524→                  ),
+   525→                  ActionChip(
+   526→                    label: const Text('Custom', style: TextStyle(fontSize: 11)),
+   527→                    tooltip: 'Clear fields',
+   528→                    onPressed: () {
+   529→                      _baseUrlController.clear();
+   530→                      _apiKeyController.clear();
+   531→                      _modelController.clear();
+   532→                    },
+   533→                  ),
+   534→                ],
+   535→              ),
+   536→              const SizedBox(height: 12),
+   537→              Row(
+   538→                children: [
+   539→                  Expanded(
+   540→                    child: TextField(
+   541→                      controller: _modelController,
+   542→                      decoration: _buildInputDecoration(
+   543→                        labelText: 'Model',
+   544→                        hintText: 'deepseek-chat',
+   545→                        prefixIcon: const Icon(
+   546→                          Icons.smart_toy_rounded,
+   547→                          size: 18,
+   548→                        ),
+   549→                      ),
+   550→                    ),
+   551→                  ),
+   552→                  const SizedBox(width: 8),
+   553→                  ElevatedButton.icon(
+   554→                    onPressed: _fetchModels,
+   555→                    icon: const Icon(
+   556→                      Icons.cloud_download,
+   557→                      size: 18,
+   558→                      color: Colors.white,
+   559→                    ),
+   560→                    label: const Text(
+   561→                      'Fetch',
+   562→                      style: TextStyle(
+   563→                        color: Colors.white,
+   564→                        fontWeight: FontWeight.bold,
+   565→                        fontSize: 12,
+   566→                      ),
+   567→                    ),
+   568→                    style: ElevatedButton.styleFrom(
+   569→                      backgroundColor: Theme.of(context).colorScheme.primary,
+   570→                      elevation: 0,
+   571→                      padding: const EdgeInsets.symmetric(
+   572→                        horizontal: 14,
+   573→                        vertical: 14,
+   574→                      ),
+   575→                      shape: RoundedRectangleBorder(
+   576→                        borderRadius: BorderRadius.circular(12),
+   577→                      ),
+   578→                    ),
+   579→                  ),
+   580→                ],
+   581→              ),
+   582→            ],
+   583→          ),
+   584→
+   585→          // 3. Parameters & Tuning Card
+   586→          _buildSettingsCard(
+   587→            icon: Icons.tune_outlined,
+   588→            title: 'Tuning & Boundaries',
+   589→            subtitle: 'Configure LLM agent parameters',
+   590→            isDark: isDark,
+   591→            children: [
+   592→              SwitchListTile(
+   593→                title: const Text('Disable Maximum Steps'),
+   594→                subtitle: const Text(
+   595→                  '⚠️ Can cause infinite loops.',
+   596→                  style: TextStyle(color: Colors.orange, fontSize: 12),
+   597→                ),
+   598→                value: _disableMaxSteps,
+   599→                onChanged: (bool value) {
+   600→                  setState(() {
+   601→                    _disableMaxSteps = value;
+   602→                  });
+   603→                  _autoSave();
+   604→                },
+   605→                contentPadding: EdgeInsets.zero,
+   606→              ),
+   607→              if (!_disableMaxSteps) ...[
+   608→                const SizedBox(height: 8),
+   609→                Text(
+   610→                  'Maximum Steps Per Task: ${_maxSteps.toInt()}',
+   611→                  style: const TextStyle(
+   612→                    fontWeight: FontWeight.w500,
+   613→                    fontSize: 13,
+   614→                  ),
+   615→                ),
+   616→                Slider(
+   617→                  value: _maxSteps,
+   618→                  min: 5,
+   619→                  max: 50,
+   620→                  divisions: 45,
+   621→                  label: _maxSteps.toInt().toString(),
+   622→                  onChanged: (value) {
+   623→                    setState(() {
+   624→                      _maxSteps = value;
+   625→                    });
+   626→                  },
+   627→                  onChangeEnd: (value) {
+   628→                    _autoSave();
+   629→                  },
+   630→                ),
+   631→              ],
+   632→              const SizedBox(height: 12),
+   633→              TextField(
+   634→                controller: _maxTokensController,
+   635→                keyboardType: TextInputType.number,
+   636→                decoration: _buildInputDecoration(
+   637→                  labelText: 'Context Limit (Max Tokens)',
+   638→                  hintText: '1024',
+   639→                  prefixIcon: const Icon(Icons.token_rounded, size: 18),
+   640→                ),
+   641→              ),
+   642→              const SizedBox(height: 16),
+   643→              Text(
+   644→                'Temperature: ${_temperature.toStringAsFixed(2)}',
+   645→                style: const TextStyle(
+   646→                  fontWeight: FontWeight.w500,
+   647→                  fontSize: 13,
+   648→                ),
+   649→              ),
+   650→              Slider(
+   651→                value: _temperature,
+   652→                min: 0.0,
+   653→                max: 2.0,
+   654→                divisions: 20,
+   655→                label: _temperature.toStringAsFixed(2),
+   656→                onChanged: (value) {
+   657→                  setState(() {
+   658→                    _temperature = value;
+   659→                  });
+   660→                },
+   661→                onChangeEnd: (value) {
+   662→                  _autoSave();
+   663→                },
+   664→              ),
+   665→            ],
+   666→          ),
+   667→
+   668→          // 4. Behavior & Extensions Card
+   669→          _buildSettingsCard(
+   670→            icon: Icons.extension_outlined,
+   671→            title: 'Behavior & Extensions',
+   672→            subtitle: 'Additional feature flags and overlay options',
+   673→            isDark: isDark,
+   674→            children: [
+   675→              SwitchListTile(
+   676→                title: const Text('Use Screen Compression'),
+   677→                subtitle: const Text(
+   678→                  'Removes duplicate elements to save tokens',
+   679→                ),
+   680→                value: _useScreenCompression,
+   681→                onChanged: (bool value) {
+   682→                  setState(() {
+   683→                    _useScreenCompression = value;
+   684→                  });
+   685→                  _autoSave();
+   686→                },
+   687→                contentPadding: EdgeInsets.zero,
+   688→              ),
+   689→              SwitchListTile(
+   690→                title: const Text('Send System Prompt'),
+   691→                subtitle: const Text('Turn off for custom LoRA fine-tunes'),
+   692→                value: _useSystemPrompt,
+   693→                onChanged: (bool value) {
+   694→                  setState(() {
+   695→                    _useSystemPrompt = value;
+   696→                  });
+   697→                  _autoSave();
+   698→                },
+   699→                contentPadding: EdgeInsets.zero,
+   700→              ),
+   701→              if (FeatureFlags.floatingOverlayEnabled)
+   702→                SwitchListTile(
+   703→                  title: const Text('Enable Floating Agent Icon'),
+   704→                  subtitle: const Text('Assign tasks without opening the app'),
+   705→                  value: _floatingIconEnabled,
+   706→                  onChanged: (val) async {
+   707→                    if (val) {
+   708→                      bool? isGranted =
+   709→                          await FlutterOverlayWindow.isPermissionGranted();
+   710→                      if (isGranted != true) {
+   711→                        bool? result =
+   712→                            await FlutterOverlayWindow.requestPermission();
+   713→                        if (result != true) {
+   714→                          if (mounted) {
+   715→                            ScaffoldMessenger.of(context).showSnackBar(
+   716→                              const SnackBar(
+   717→                                content: Text(
+   718→                                  'Permission to draw over other apps is required.',
+   719→                                ),
+   720→                              ),
+   721→                            );
+   722→                          }
+   723→                          return;
+   724→                        }
+   725→                      }
+   726→                      if (await FlutterOverlayWindow.isActive() == false) {
+   727→                        await FlutterOverlayWindow.showOverlay(
+   728→                          enableDrag: true,
+   729→                          overlayTitle: "PrivateAgent",
+   730→                          overlayContent: "Floating Assistant",
+   731→                          flag: OverlayFlag.focusPointer,
+   732→                          alignment: OverlayAlignment.centerRight,
+   733→                          visibility: NotificationVisibility.visibilitySecret,
+   734→                          positionGravity: PositionGravity.auto,
+   735→                          startPosition: const OverlayPosition(0, 200),
+   736→                          width: 56,
+   737→                          height: 56,
+   738→                        );
+   739→                      }
+   740→                    } else {
+   741→                      if (await FlutterOverlayWindow.isActive() == true) {
+   742→                        await FlutterOverlayWindow.closeOverlay();
+   743→                      }
+   744→                    }
+   745→                    setState(() => _floatingIconEnabled = val);
+   746→                    _autoSave();
+   747→                  },
+   748→                  contentPadding: EdgeInsets.zero,
+   749→                ),
+   750→            ],
+   751→          ),
+   752→
+   753→          // 5. Telegram Remote Access Card
+   754→          _buildSettingsCard(
+   755→            icon: Icons.send_and_archive_outlined,
+   756→            title: 'Telegram Remote Access',
+   757→            subtitle: 'Control your agent remotely from anywhere',
+   758→            isDark: isDark,
+   759→            children: [
+   760→              TextField(
+   761→                controller: _telegramTokenController,
+   762→                decoration: _buildInputDecoration(
+   763→                  labelText: 'Telegram Bot Token',
+   764→                  hintText: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+   765→                  prefixIcon: const Icon(Icons.send_rounded, size: 18),
+   766→                ),
+   767→              ),
+   768→              SwitchListTile(
+   769→                title: const Text('Enable Telegram Bot'),
+   770→                subtitle: const Text('Allows remote control via Telegram chat'),
+   771→                value: _telegramEnabled,
+   772→                onChanged: (val) {
+   773→                  setState(() => _telegramEnabled = val);
+   774→                  _autoSave();
+   775→                },
+   776→                contentPadding: EdgeInsets.zero,
+   777→              ),
+   778→            ],
+   779→          ),
+   780→
+   781→          // 6. Accessibility Screen Control Card
+   782→          _buildSettingsCard(
+   783→            icon: Icons.visibility_outlined,
+   784→            title: 'Screen Control (Accessibility)',
+   785→            subtitle: 'Required to read screen and perform automated clicks',
+   786→            isDark: isDark,
+   787→            children: [_buildAccessibilityCard()],
+   788→          ),
+   789→
+   790→          // 7. System Permissions Card
+   791→          _buildSettingsCard(
+   792→            icon: Icons.security_outlined,
+   793→            title: 'App Permissions',
+   794→            subtitle: 'Required for automation, microphone, and contacts',
+   795→            isDark: isDark,
+   796→            children: _buildPermissionTiles(),
+   797→          ),
+   798→
+   799→          // 8. Task History Card
+   800→          _buildSettingsCard(
+   801→            icon: Icons.history_outlined,
+   802→            title: 'Execution logs',
+   803→            subtitle: 'View history of tasks and token analytics',
+   804→            isDark: isDark,
+   805→            children: [
+   806→              ListTile(
+   807→                contentPadding: EdgeInsets.zero,
+   808→                title: const Text('View Task History'),
+   809→                subtitle: const Text(
+   810→                  'Access complete trace of execution steps',
+   811→                ),
+   812→                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+   813→                onTap: () {
+   814→                  Navigator.push(
+   815→                    context,
+   816→                    MaterialPageRoute(
+   817→                      builder: (context) => const TaskHistoryScreen(),
+   818→                    ),
+   819→                  );
+   820→                },
+   821→              ),
+   822→            ],
+   823→          ),
+   824→
+   825→          // 9. About / Links Card
+   826→          _buildSettingsCard(
+   827→            icon: Icons.info_outline_rounded,
+   828→            title: 'About PrivateAgent',
+   829→            subtitle: 'Resources and repository access',
+   830→            isDark: isDark,
+   831→            children: [
+   832→              ListTile(
+   833→                contentPadding: EdgeInsets.zero,
+   834→                title: const Text('Project Repository'),
+   835→                subtitle: const Text('View source code on GitHub'),
+   836→                leading: const Icon(Icons.code_rounded),
+   837→                onTap: () {
+   838→                  launchUrl(
+   839→                    Uri.parse('https://github.com/orailnoor/private-agent'),
+   840→                    mode: LaunchMode.externalApplication,
+   841→                  );
+   842→                },
+   843→              ),
+   844→              ListTile(
+   845→                contentPadding: EdgeInsets.zero,
+   846→                title: const Text('Orailnoor on YouTube'),
+   847→                subtitle: const Text('Subscribe for tutorials and updates'),
+   848→                leading: const Icon(
+   849→                  Icons.play_circle_fill_rounded,
+   850→                  color: Colors.red,
+   851→                ),
+   852→                onTap: () {
+   853→                  launchUrl(
+   854→                    Uri.parse('https://www.youtube.com/orailnoor'),
+   855→                    mode: LaunchMode.externalApplication,
+   856→                  );
+   857→                },
+   858→              ),
+   859→              ListTile(
+   860→                contentPadding: EdgeInsets.zero,
+   861→                title: const Text('Tech Jarves on YouTube'),
+   862→                subtitle: const Text('Subscribe for tutorials and updates'),
+   863→                leading: const Icon(
+   864→                  Icons.play_circle_fill_rounded,
+   865→                  color: Colors.red,
+   866→                ),
+   867→                onTap: () {
+   868→                  launchUrl(
+   869→                    Uri.parse('https://www.youtube.com/techjarves'),
+   870→                    mode: LaunchMode.externalApplication,
+   871→                  );
+   872→                },
+   873→              ),
+   874→            ],
+   875→          ),
+   876→        ],
+   877→      ),
+   878→    );
+   879→  }
+   880→
+   881→  List<Widget> _buildPermissionTiles() {
+   882→    final permissionMap = {
+   883→      'Microphone': Permission.microphone,
+   884→      'Contacts': Permission.contacts,
+   885→      'Phone': Permission.phone,
+   886→      'SMS': Permission.sms,
+   887→      'Notifications': Permission.notification,
+   888→    };
+   889→
+   890→    final icons = {
+   891→      'Microphone': Icons.mic,
+   892→      'Contacts': Icons.contacts,
+   893→      'Phone': Icons.phone,
+   894→      'SMS': Icons.sms,
+   895→      'Notifications': Icons.notifications,
+   896→    };
+   897→
+   898→    final list = permissionMap.entries.map((entry) {
+   899→      final status = _permissions[entry.key];
+   900→      final isGranted = status?.isGranted ?? false;
+   901→
+   902→      return ListTile(
+   903→        leading: Icon(icons[entry.key]),
+   904→        title: Text(entry.key),
+   905→        trailing: isGranted
+   906→            ? Icon(
+   907→                Icons.check_circle,
+   908→                color: Theme.of(context).colorScheme.primary,
+   909→              )
+   910→            : TextButton(
+   911→                onPressed: () => _requestPermission(entry.key, entry.value),
+   912→                child: const Text('Grant'),
+   913→              ),
+   914→        subtitle: Text(
+   915→          isGranted
+   916→              ? 'Granted'
+   917→              : (status?.isDenied ?? true
+   918→                    ? 'Not granted'
+   919→                    : 'Denied permanently'),
+   920→          style: TextStyle(
+   921→            color: isGranted
+   922→                ? Theme.of(context).colorScheme.primary
+   923→                : Colors.orange,
+   924→            fontSize: 12,
+   925→          ),
+   926→        ),
+   927→      );
+   928→    }).toList();
+   929→
+   930→    if (FeatureFlags.floatingOverlayEnabled) {
+   931→      list.add(
+   932→        ListTile(
+   933→          leading: const Icon(Icons.layers),
+   934→          title: const Text('Display Over Other Apps (Floating Bubble)'),
+   935→          trailing: _isOverlayPermissionGranted
+   936→              ? Icon(
+   937→                  Icons.check_circle,
+   938→                  color: Theme.of(context).colorScheme.primary,
+   939→                )
+   940→              : TextButton(
+   941→                  onPressed: () async {
+   942→                    await FlutterOverlayWindow.requestPermission();
+   943→                    final granted =
+   944→                        await FlutterOverlayWindow.isPermissionGranted();
+   945→                    setState(() {
+   946→                      _isOverlayPermissionGranted = granted;
+   947→                    });
+   948→                  },
+   949→                  child: const Text('Grant'),
+   950→                ),
+   951→          subtitle: Text(
+   952→            _isOverlayPermissionGranted ? 'Granted' : 'Not granted',
+   953→            style: TextStyle(
+   954→              color: _isOverlayPermissionGranted
+   955→                  ? Theme.of(context).colorScheme.primary
+   956→                  : Colors.orange,
+   957→              fontSize: 12,
+   958→            ),
+   959→          ),
+   960→        ),
+   961→      );
+   962→    }
+   963→
+   964→    return list;
+   965→  }
+   966→
+   967→  Widget _buildShizukuCard() {
+   968→    return Card(
+   969→      child: Padding(
+   970→        padding: const EdgeInsets.all(16),
+   971→        child: Column(
+   972→          crossAxisAlignment: CrossAxisAlignment.start,
+   973→          children: [
+   974→            Row(
+   975→              children: [
+   976→                Icon(
+   977→                  widget.shizukuService.isAvailable
+   978→                      ? Icons.link
+   979→                      : Icons.link_off,
+   980→                  color: widget.shizukuService.isAvailable
+   981→                      ? Colors.green
+   982→                      : Colors.grey,
+   983→                ),
+   984→                const SizedBox(width: 8),
+   985→                Text(
+   986→                  widget.shizukuService.isAvailable
+   987→                      ? 'Shizuku is running'
+   988→                      : 'Shizuku not detected',
+   989→                  style: TextStyle(
+   990→                    fontWeight: FontWeight.w600,
+   991→                    color: widget.shizukuService.isAvailable
+   992→                        ? Colors.green
+   993→                        : Colors.grey,
+   994→                  ),
+   995→                ),
+   996→              ],
+   997→            ),
+   998→            const SizedBox(height: 12),
+   999→            if (!widget.shizukuService.isAvailable) ...[
+  1000→              const Text(
+  1001→                '1. Install Shizuku from Play Store\n'
+  1002→                '2. Open Shizuku and start it via Wireless Debugging\n'
+  1003→                '3. Come back here and tap "Check Again"',
+  1004→                style: TextStyle(fontSize: 13),
+  1005→              ),
+  1006→              const SizedBox(height: 12),
+  1007→              OutlinedButton(
+  1008→                onPressed: () async {
+  1009→                  await widget.shizukuService.checkAvailability();
+  1010→                  if (mounted) setState(() {});
+  1011→                },
+  1012→                child: const Text('Check Again'),
+  1013→              ),
+  1014→            ] else if (!widget.shizukuService.hasPermission) ...[
+  1015→              OutlinedButton(
+  1016→                onPressed: () async {
+  1017→                  await widget.shizukuService.requestPermission();
+  1018→                  if (mounted) setState(() {});
+  1019→                },
+  1020→                child: const Text('Grant Shizuku Permission'),
+  1021→              ),
+  1022→            ] else ...[
+  1023→              Row(
+  1024→                children: [
+  1025→                  const Icon(Icons.check_circle, color: Colors.green, size: 16),
+  1026→                  const SizedBox(width: 4),
+  1027→                  Text(
+  1028→                    'Permission granted — ADB commands available',
+  1029→                    style: TextStyle(color: Colors.green[700], fontSize: 13),
+  1030→                  ),
+  1031→                ],
+  1032→              ),
+  1033→            ],
+  1034→          ],
+  1035→        ),
+  1036→      ),
+  1037→    );
+  1038→  }
+  1039→
+  1040→  Widget _buildAccessibilityCard() {
+  1041→    return FutureBuilder<bool>(
+  1042→      future: widget.screenAutomationService.isServiceRunning(),
+  1043→      builder: (context, snapshot) {
+  1044→        final isRunning = snapshot.data ?? false;
+  1045→
+  1046→        return Card(
+  1047→          child: Padding(
+  1048→            padding: const EdgeInsets.all(16),
+  1049→            child: Column(
+  1050→              crossAxisAlignment: CrossAxisAlignment.start,
+  1051→              children: [
+  1052→                Row(
+  1053→                  children: [
+  1054→                    Icon(
+  1055→                      isRunning ? Icons.visibility : Icons.visibility_off,
+  1056→                      color: isRunning ? Colors.green : Colors.grey,
+  1057→                    ),
+  1058→                    const SizedBox(width: 8),
+  1059→                    Text(
+  1060→                      isRunning
+  1061→                          ? 'Screen Control is active'
+  1062→                          : 'Screen Control is disabled',
+  1063→                      style: TextStyle(
+  1064→                        fontWeight: FontWeight.w600,
+  1065→                        color: isRunning ? Colors.green : Colors.grey,
+  1066→                      ),
+  1067→                    ),
+  1068→                  ],
+  1069→                ),
+  1070→                const SizedBox(height: 12),
+  1071→                if (!isRunning) ...[
+  1072→                  const Text(
+  1073→                    'Tap below to open Accessibility Settings, then find "PrivateAgent Screen Control" and enable it.',
+  1074→                    style: TextStyle(fontSize: 13),
+  1075→                  ),
+  1076→                  const SizedBox(height: 12),
+  1077→                  OutlinedButton.icon(
+  1078→                    onPressed: () async {
+  1079→                      await widget.screenAutomationService
+  1080→                          .openAccessibilitySettings();
+  1081→                    },
+  1082→                    icon: const Icon(Icons.settings),
+  1083→                    label: const Text('Open Accessibility Settings'),
+  1084→                  ),
+  1085→                ] else ...[
+  1086→                  Text(
+  1087→                    'Can read screen, tap, scroll, and type in other apps',
+  1088→                    style: TextStyle(color: Colors.green[700], fontSize: 13),
+  1089→                  ),
+  1090→                ],
+  1091→              ],
+  1092→            ),
+  1093→          ),
+  1094→        );
+  1095→      },
+  1096→    );
+  1097→  }
+  1098→}
+  1099→

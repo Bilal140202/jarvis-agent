@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Jarvis Agent</string>
+    <string name="settings_title">Settings</string>
+    <string name="accessibility_service_description">Jarvis Agent uses accessibility to read your screen and perform actions on your behalf. This allows it to tap buttons, type text, scroll, and navigate apps based on your voice or text commands.</string>
+    <string name="overlay_notification_title">Jarvis Overlay</string>
+    <string name="overlay_notification_text">Floating assistant active</string>
+</resources>
